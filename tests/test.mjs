@@ -8,6 +8,7 @@ import { PNG } from 'pngjs';
 import { sunPosition, eventWindow, zonedDayStart, tzOffsetMs, formatLocal } from '../js/solar.js';
 import { elevationAngle, rayAltitude, effR, horizonDistanceToLayer } from '../js/geodesy.js';
 import { Dem, TERRARIUM_URL, decodePng } from '../js/dem.js';
+import { cloudsAtAz } from '../js/weather.js';
 import { horizonProfile, prefetchFan } from '../js/terrain.js';
 
 let fails = 0, passes = 0;
@@ -101,6 +102,16 @@ const check = (name, ok, info = '') => {
   check('quota raggio orizzontale a 200 km ≈ d²/2R_eff', Math.abs(z - 200000 ** 2 / (2 * effR(0.13))) < 15, `${z.toFixed(0)} m`);
   const dl = horizonDistanceToLayer(40, 2000) / 1000;
   check('orizzonte di uno strato a 2 km da 40 m s.l.m. (cfr. NimbuScope 160–230 km per le medie)', dl > 150 && dl < 220, `${dl.toFixed(0)} km`);
+}
+
+// ---------- 5b. Interpolazione delle nubi in azimut ----------
+{
+  const mk = (v) => ({ cols: [{ d: 0, times: [0, 3600000], low: [v, v], mid: [null, null], high: [0, 100] }] });
+  const set = [{ az: 230, data: mk(0) }, { az: 240, data: mk(100) }, { az: 250, data: mk(50) }];
+  const a = cloudsAtAz(set, 235, 1800000)[0], b = cloudsAtAz(set, 247.5, 0)[0], c = cloudsAtAz(set, 260, 0)[0];
+  check('nubi interpolate tra direzioni (az e tempo, null gestiti)',
+    a.low === 50 && a.high === 50 && a.mid === null && b.low === 62.5 && c.low === 50,
+    `235°→${a.low}, 247.5°→${b.low}, fuori ventaglio→${c.low}`);
 }
 
 // ---------- 6. DEM vs vette note (richiede rete verso S3) ----------

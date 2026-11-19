@@ -2,7 +2,7 @@ import { sunPosition, eventWindow, zonedDayStart, formatLocal, SUN_SEMIDIAMETER 
 import { destination, rayAltitude, horizonDistanceToLayer, DEFAULT_K } from './geodesy.js';
 import { Dem, browserTileLoader } from './dem.js';
 import { prefetchFan, horizonProfile, horizonAt, transect, rayTerrainHit, BANDS, MAX_DIST } from './terrain.js';
-import { fetchMeta, fetchTransectClouds, cloudsAt, rayLayerCrossings, LAYERS, MODELS } from './weather.js';
+import { fetchMeta, fetchTransectClouds, cloudsAtAz, rayLayerCrossings, LAYERS, MODELS } from './weather.js';
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -212,9 +212,17 @@ async function loadWeather(id) {
   if (!S.win?.ok) return;
   S.weather = null; S.weatherErr = 'caricamento…'; renderDynamic();
   try {
-    const w = await fetchTransectClouds(S.obs, S.azRef, S.date, S.model);
+    // tre direzioni (inizio, evento, fine finestra); una sola se il Sole si sposta di poco
+    const [a0, a1] = S.azWin;
+    const dirs = a1 - a0 < 3 ? [S.azRef] : [a0, S.azRef, a1];
+    const res = await Promise.all(dirs.map((az) => fetchTransectClouds(S.obs, az, S.date, S.model)));
     if (id !== S.loadId) return;
-    S.weather = w; S.weatherErr = null;
+    S.weather = {
+      model: res[0].model,
+      source: [...new Set(res.map((r) => r.source))].join(' / '),
+      set: res.map((r, i) => ({ az: dirs[i], data: r })).sort((x, y) => x.az - y.az),
+    };
+    S.weatherErr = null;
   } catch (e) {
     if (id !== S.loadId) return;
     S.weatherErr = e.message;
@@ -234,7 +242,7 @@ function currentFrame() {
   const hz = horizonAt(S.profile, m.az);
   let snap = null, cross = [];
   if (S.weather) {
-    snap = cloudsAt(S.weather, m.t);
+    snap = cloudsAtAz(S.weather.set, m.az, m.t);
     cross = rayLayerCrossings(snap, S.h0, m.el, hit ? hit.d : Infinity);
   }
   return { ...m, tr, hit, hz, snap, cross, state: S.vis[S.tIdx] };
@@ -284,7 +292,11 @@ function renderDynamic() {
       lines.push(`Nubi ${c.layer.name.padEnd(6)} ${String(Math.round(c.from / 1000)).padStart(3)}–${String(Math.round(c.to / 1000)).padStart(3)} km · ${cov}`);
     }
     const ml = MODELS.find((m) => m.id === S.weather.model)?.label ?? S.weather.model;
-    lines.push(`Fonte: ${ml} · ${S.weather.source} · azimut fisso ${(((S.azRef % 360) + 360) % 360).toFixed(0)}°`);
+    const n360 = (a) => (((a % 360) + 360) % 360).toFixed(0);
+    const set = S.weather.set;
+    const dirTxt = set.length === 1 ? `nubi lungo ${n360(set[0].az)}°`
+      : `nubi su ${set.length} direzioni (${set.map((x) => n360(x.az) + '°').join(', ')}), interpolate sull'azimut del Sole`;
+    lines.push(`Fonte: ${ml} · ${S.weather.source} · ${dirTxt}`);
   }
   $('clouds').textContent = lines.join('\n');
 

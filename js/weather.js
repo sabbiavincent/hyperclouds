@@ -116,6 +116,21 @@ export function cloudsAt(data, t) {
   });
 }
 
+/**
+ * Nubi interpolate in azimut: `set` = [{az, data}] ordinato per az (unwrapped), una per direzione scaricata.
+ * Per ogni colonna (stessa distanza) si interpola linearmente tra le due direzioni che racchiudono az.
+ */
+export function cloudsAtAz(set, az, t) {
+  if (set.length === 1) return cloudsAt(set[0].data, t);
+  let i = set.findIndex((s) => s.az >= az);
+  if (i === -1) return cloudsAt(set[set.length - 1].data, t);
+  if (i === 0) return cloudsAt(set[0].data, t);
+  const A = cloudsAt(set[i - 1].data, t), B = cloudsAt(set[i].data, t);
+  const f = (az - set[i - 1].az) / (set[i].az - set[i - 1].az);
+  const mix = (a, b) => (a == null ? b : b == null ? a : a * (1 - f) + b * f);
+  return A.map((c, k) => ({ d: c.d, low: mix(c.low, B[k].low), mid: mix(c.mid, B[k].mid), high: mix(c.high, B[k].high) }));
+}
+
 function coverAt(snap, d, key) {
   if (d <= snap[0].d) return snap[0][key];
   for (let i = 1; i < snap.length; i++) {
