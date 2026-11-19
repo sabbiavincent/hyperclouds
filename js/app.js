@@ -89,6 +89,7 @@ $('coordForm').onsubmit = (e) => {
 };
 $('detClouds').addEventListener('toggle', () => renderDynamic());
 window.addEventListener('resize', () => { renderStatic(); renderDynamic(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { renderStatic(); renderDynamic(); } });
 
 // ---------- mappa ----------
 const map = new maplibregl.Map({
@@ -375,6 +376,7 @@ function skyColors(el) {
 
 function drawPano(f) {
   const { ctx, w, h } = setupCanvas($('pano'));
+  if (!w || !h) return;
   const P = S.profile;
   const a0 = P.azMin, a1 = P.azMax;
   const hzMax = Math.max(...P.prof.map((p) => p.horizon));
@@ -484,6 +486,7 @@ function drawPanoClouds(ctx, f, X, Y, a0, a1, e0, e1, w, h) {
 
 function drawSection(f) {
   const { ctx, w, h } = setupCanvas($('section'));
+  if (!w || !h) return;
   const L = 34, R = 8, T = 8, B = 18;
   const pw = w - L - R, ph = h - T - B;
   const maxKm = 300, maxAlt = 12000;
@@ -542,6 +545,7 @@ function drawSection(f) {
 function drawTimeline() {
   const c = $('timeline');
   const { ctx, w, h } = setupCanvas(c);
+  if (!c.width || !c.height) { S._tlImage = null; return; }   // pagina nascosta o non ancora impaginata
   ctx.clearRect(0, 0, w, h);
   if (!S.vis.length) return;
   const n = S.vis.length, bw = w / n;
@@ -577,6 +581,7 @@ function drawTimeline() {
 
 function drawTimelineCursor() {
   const c = $('timeline');
+  if (!c.width) return;
   if (!S._tlImage || c.width !== S._tlImage.width) { drawTimeline(); if (!S._tlImage) return; }
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.setTransform(1, 0, 0, 1, 0, 0);
