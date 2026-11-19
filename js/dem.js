@@ -5,6 +5,10 @@ import { tileCoord } from './geodesy.js';
 
 export const TERRARIUM_URL = (z, x, y) =>
   `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+// stesso archivio, nome host diverso (utile se un filtro DNS blocca uno dei due)
+export const TERRARIUM_URL_ALT = (z, x, y) =>
+  `https://elevation-tiles-prod.s3.amazonaws.com/terrarium/${z}/${x}/${y}.png`;
+let preferAlt = false;
 
 // Decodifica PNG in JavaScript puro (senza canvas): i browser che proteggono dal fingerprinting
 // (Firefox in modalità rigorosa, Brave, Tor) alterano i pixel letti da un canvas, e qui un'unità
@@ -74,8 +78,11 @@ async function canvasDecode(buf) {
 // Loader per il browser: restituisce {width, height, data: Uint8ClampedArray RGBA}
 export async function browserTileLoader(z, x, y) {
   let res;
-  try { res = await fetch(TERRARIUM_URL(z, x, y), { mode: 'cors' }); }
-  catch (e) { throw new Error(`rete (${e.message || e})`); }
+  const urls = preferAlt ? [TERRARIUM_URL_ALT, TERRARIUM_URL] : [TERRARIUM_URL, TERRARIUM_URL_ALT];
+  for (let i = 0; i < urls.length && !res; i++) {
+    try { res = await fetch(urls[i](z, x, y), { mode: 'cors' }); if (i === 1) preferAlt = !preferAlt; }
+    catch (e) { if (i === urls.length - 1) throw new Error(`rete (${e.message || e}): s3.amazonaws.com non raggiungibile, forse bloccato da un filtro DNS`); }
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status} su ${z}/${x}/${y}`);
   const buf = await res.arrayBuffer();
   if (typeof DecompressionStream !== 'undefined') {
