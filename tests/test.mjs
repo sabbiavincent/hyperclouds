@@ -127,6 +127,14 @@ const check = (name, ok, info = '') => {
     `${b.lat.toFixed(5)}, ${b.lon.toFixed(5)}`);
 }
 
+// ---------- 5d. Regressione: nessun ciclo GPS → osservatore → GPS ----------
+{
+  const fs = await import('fs');
+  const src = fs.readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+  const so = src.slice(src.indexOf('function setObserver'), src.indexOf('\n}\n', src.indexOf('function setObserver')) + 2);
+  check('setObserver non richiama il GPS e carica una sola volta', !/locatePhone/.test(so) && (so.match(/load\(/g) || []).length === 1);
+}
+
 // ---------- 6. DEM vs vette note (richiede rete verso S3) ----------
 const nodeLoader = async (z, x, y) => {
   const r = await fetch(TERRARIUM_URL(z, x, y));

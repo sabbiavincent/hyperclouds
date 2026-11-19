@@ -56,25 +56,25 @@ document.querySelectorAll('#event button').forEach((b) => {
   b.onclick = () => {
     S.type = b.dataset.v; store.set('type', S.type);
     document.querySelectorAll('#event button').forEach((x) => x.classList.toggle('on', x === b));
-    showCalls();
-load();
-locatePhone(true);
+    load();
   };
 });
 $('model').onchange = () => { S.model = $('model').value; store.set('model', S.model); loadWeather(S.loadId); };
 $('date').onchange = () => { S.date = $('date').value; load({ keepMeta: true }); };
 $('hag').onchange = () => { S.hag = Math.max(0, +$('hag').value || 0); store.set('hag', S.hag); load({ keepMeta: true }); };
 $('reload').onclick = () => load({ keepMeta: true });
-$('slider').oninput = () => { S.tIdx = +$('slider').value; renderDynamic(); };
+let rafPending = false;   // al massimo un ridisegno per fotogramma mentre si trascina lo slider
+$('slider').oninput = () => {
+  S.tIdx = +$('slider').value;
+  if (!rafPending) { rafPending = true; requestAnimationFrame(() => { rafPending = false; renderDynamic(); }); }
+};
 function locatePhone(auto) {
   if (!navigator.geolocation) { if (!auto) status('Geolocalizzazione non disponibile in questo browser.'); return; }
   if (!auto) status('Richiesta posizione GPS…');
   navigator.geolocation.getCurrentPosition(
     (p) => {
       S.phone = { lat: p.coords.latitude, lon: p.coords.longitude };
-      // all'avvio sposta l'osservatore sul telefono solo se l'utente non ha già scelto un punto
-      if (!auto || !S.userMoved) setObserver(S.phone, { byUser: !auto });
-      else renderMapDynamic(currentFrame());
+      setObserver(S.phone);
     },
     (e) => { if (!auto) status(`GPS non disponibile: ${e.message}`); },
     { enableHighAccuracy: true, timeout: auto ? 8000 : 15000, maximumAge: 60000 });
@@ -120,9 +120,7 @@ function setObserver(o, { byUser = true } = {}) {
   if (byUser) S.userMoved = true;
   S.obs = o; store.set('obs', o);
   map.flyTo({ center: [o.lon, o.lat], zoom: Math.max(map.getZoom(), 7.4), duration: 600 });
-  showCalls();
-load();
-locatePhone(true);
+  load();
 }
 
 const line = (pts) => ({ type: 'Feature', geometry: { type: 'LineString', coordinates: pts.map((p) => [p.lon, p.lat]) } });
@@ -601,5 +599,15 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 showCalls();
-load();
-locatePhone(true);
+(async () => {
+  const gps = await new Promise((res) => {
+    if (!navigator.geolocation) return res(null);
+    const timer = setTimeout(() => res(null), 4000);
+    navigator.geolocation.getCurrentPosition(
+      (p) => { clearTimeout(timer); res({ lat: p.coords.latitude, lon: p.coords.longitude }); },
+      () => { clearTimeout(timer); res(null); },
+      { enableHighAccuracy: false, timeout: 4000, maximumAge: 300000 });
+  });
+  if (gps) { S.phone = gps; S.obs = gps; store.set('obs', gps); map.jumpTo({ center: [gps.lon, gps.lat] }); }
+  load();
+})();

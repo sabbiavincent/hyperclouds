@@ -80,8 +80,10 @@ export async function browserTileLoader(z, x, y) {
   let res;
   const urls = preferAlt ? [TERRARIUM_URL_ALT, TERRARIUM_URL] : [TERRARIUM_URL, TERRARIUM_URL_ALT];
   for (let i = 0; i < urls.length && !res; i++) {
-    try { res = await fetch(urls[i](z, x, y), { mode: 'cors' }); if (i === 1) preferAlt = !preferAlt; }
-    catch (e) { if (i === urls.length - 1) throw new Error(`rete (${e.message || e}): s3.amazonaws.com non raggiungibile, forse bloccato da un filtro DNS`); }
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 20000);
+    try { res = await fetch(urls[i](z, x, y), { mode: 'cors', signal: ctl.signal }); if (i === 1) preferAlt = !preferAlt; }
+    catch (e) { if (i === urls.length - 1) throw new Error(`rete (${e.name === 'AbortError' ? 'nessuna risposta in 20 s' : e.message || e}): s3.amazonaws.com non raggiungibile`); }
+    finally { clearTimeout(timer); }
   }
   if (!res.ok) throw new Error(`HTTP ${res.status} su ${z}/${x}/${y}`);
   const buf = await res.arrayBuffer();

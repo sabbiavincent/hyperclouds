@@ -42,7 +42,11 @@ function countCall(url) {
 
 async function getJson(url) {
   countCall(url);
-  const r = await fetch(url);
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 25000);
+  let r;
+  try { r = await fetch(url, { signal: ctl.signal }); }
+  catch (e) { throw new Error(e.name === 'AbortError' ? 'Open-Meteo non risponde (25 s)' : `rete: ${e.message}`); }
+  finally { clearTimeout(timer); }
   const j = await r.json().catch(() => null);
   if (!r.ok) {
     if (r.status === 429) throw new Error(`limite di chiamate Open-Meteo superato (${j?.reason || '429'}): riprova più tardi`);
