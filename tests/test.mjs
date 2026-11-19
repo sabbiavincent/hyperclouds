@@ -8,7 +8,8 @@ import { PNG } from 'pngjs';
 import { sunPosition, eventWindow, zonedDayStart, tzOffsetMs, formatLocal } from '../js/solar.js';
 import { elevationAngle, rayAltitude, effR, horizonDistanceToLayer } from '../js/geodesy.js';
 import { Dem, TERRARIUM_URL, decodePng } from '../js/dem.js';
-import { cloudsAtAz } from '../js/weather.js';
+import { cloudsAtAz, rayClear } from '../js/weather.js';
+import { parseCoords } from '../js/coords.js';
 import { horizonProfile, prefetchFan } from '../js/terrain.js';
 
 let fails = 0, passes = 0;
@@ -112,6 +113,18 @@ const check = (name, ok, info = '') => {
   check('nubi interpolate tra direzioni (az e tempo, null gestiti)',
     a.low === 50 && a.high === 50 && a.mid === null && b.low === 62.5 && c.low === 50,
     `235°→${a.low}, 247.5°→${b.low}, fuori ventaglio→${c.low}`);
+}
+
+// ---------- 5c. Probabilità lungo il raggio e coordinate ----------
+{
+  const base = [0, 1, 2].map((i) => ({ d: i * 150000, low: 0, mid: 0, high: 0 }));
+  const clear = rayClear(base, 50, 5).P, over = rayClear(base.map((c) => ({ ...c, low: 100 })), 50, 5).P;
+  const half = rayClear(base.map((c) => ({ ...c, low: 50 })), 50, 5).P;
+  check('probabilità: sereno = 1, coperto basso < 5%, metà copertura intermedia', clear === 1 && over < 0.05 && half > 0.3 && half < 0.9,
+    `sereno ${clear}, coperto ${(over * 100).toFixed(1)}%, 50% → ${(half * 100).toFixed(0)}%`);
+  const a = parseCoords('43.7696, 11.2558'), b = parseCoords(`43°46'10.6"N 11°15'20.9"E`), c = parseCoords('-33.87 151.21'), d = parseCoords('ciao');
+  check('coordinate decimali e sessagesimali', Math.abs(a.lat - 43.7696) < 1e-9 && Math.abs(b.lat - 43.76961) < 1e-4 && Math.abs(b.lon - 11.25581) < 1e-4 && c.lat === -33.87 && d === null,
+    `${b.lat.toFixed(5)}, ${b.lon.toFixed(5)}`);
 }
 
 // ---------- 6. DEM vs vette note (richiede rete verso S3) ----------

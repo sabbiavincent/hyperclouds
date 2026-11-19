@@ -1,8 +1,10 @@
 import { sunPosition, eventWindow, zonedDayStart, formatLocal, SUN_SEMIDIAMETER } from './solar.js';
 import { destination, rayAltitude, horizonDistanceToLayer, DEFAULT_K } from './geodesy.js';
 import { Dem, browserTileLoader } from './dem.js';
+import { parseCoords } from './coords.js';
 import { prefetchFan, horizonProfile, horizonAt, transect, rayTerrainHit, BANDS, MAX_DIST } from './terrain.js';
-import { fetchMeta, fetchTransectClouds, cloudsAtAz, rayLayerCrossings, LAYERS, MODELS } from './weather.js';
+import { fetchMeta, fetchTransectClouds, cloudsAtAz, rayLayerCrossings, rayClear, coverAt, callCount,
+  DAILY_LIMIT, GAP_L_KM, LAYER_TOP, LAYERS, MODELS } from './weather.js';
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -18,7 +20,8 @@ const S = {
   hag: store.get('hag', 2),
   date: null, tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
   h0: null, win: null, profile: null, azRef: 0, weather: null, weatherErr: null,
-  minutes: [], vis: [], tIdx: 0, trCache: new Map(), loadId: 0,
+  minutes: [], vis: [], probs: [], tIdx: 0, trCache: new Map(), loadId: 0,
+  phone: null, userMoved: false, cloudCache: null,
 };
 
 // ---------- utilità ----------
@@ -26,6 +29,13 @@ const unwrap = (a, ref) => ref + ((((a - ref) % 360) + 540) % 360) - 180;
 const fmtDeg = (x, d = 2) => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(d) + '°';
 const todayIn = (tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());
 const status = (s) => { $('status').textContent = s; };
+function showCalls() {
+  const n = callCount(), el = $('calls');
+  el.textContent = `Chiamate Open-Meteo oggi da questo dispositivo (stima): ${n} su ${DAILY_LIMIT} (limite per rete, non per dispositivo).`;
+  el.classList.toggle('warn', n > 0.8 * DAILY_LIMIT);
+  if (n > 0.8 * DAILY_LIMIT) status(`Attenzione: circa ${n} chiamate Open-Meteo oggi, vicino al limite di ${DAILY_LIMIT}.`);
+}
+
 const progress = (f) => { $('bar').style.width = `${Math.round(f * 100)}%`; if (f >= 1) setTimeout(() => ($('bar').style.width = '0'), 400); };
 
 function setupCanvas(c) {
@@ -46,7 +56,9 @@ document.querySelectorAll('#event button').forEach((b) => {
   b.onclick = () => {
     S.type = b.dataset.v; store.set('type', S.type);
     document.querySelectorAll('#event button').forEach((x) => x.classList.toggle('on', x === b));
-    load();
+    showCalls();
+load();
+locatePhone(true);
   };
 });
 $('model').onchange = () => { S.model = $('model').value; store.set('model', S.model); loadWeather(S.loadId); };
@@ -54,14 +66,28 @@ $('date').onchange = () => { S.date = $('date').value; load({ keepMeta: true });
 $('hag').onchange = () => { S.hag = Math.max(0, +$('hag').value || 0); store.set('hag', S.hag); load({ keepMeta: true }); };
 $('reload').onclick = () => load({ keepMeta: true });
 $('slider').oninput = () => { S.tIdx = +$('slider').value; renderDynamic(); };
-$('gps').onclick = () => {
-  if (!navigator.geolocation) return status('Geolocalizzazione non disponibile in questo browser.');
-  status('Richiesta posizione GPS…');
+function locatePhone(auto) {
+  if (!navigator.geolocation) { if (!auto) status('Geolocalizzazione non disponibile in questo browser.'); return; }
+  if (!auto) status('Richiesta posizione GPS…');
   navigator.geolocation.getCurrentPosition(
-    (p) => setObserver({ lat: p.coords.latitude, lon: p.coords.longitude }),
-    (e) => status(`GPS non disponibile: ${e.message}`),
-    { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+    (p) => {
+      S.phone = { lat: p.coords.latitude, lon: p.coords.longitude };
+      // all'avvio sposta l'osservatore sul telefono solo se l'utente non ha già scelto un punto
+      if (!auto || !S.userMoved) setObserver(S.phone, { byUser: !auto });
+      else renderMapDynamic(currentFrame());
+    },
+    (e) => { if (!auto) status(`GPS non disponibile: ${e.message}`); },
+    { enableHighAccuracy: true, timeout: auto ? 8000 : 15000, maximumAge: 60000 });
+}
+$('gps').onclick = () => locatePhone(false);
+$('coordForm').onsubmit = (e) => {
+  e.preventDefault();
+  const c = parseCoords($('coordIn').value);
+  if (!c || Math.abs(c.lat) > 90 || Math.abs(c.lon) > 180) return status('Coordinate non riconosciute: usa "43.7696, 11.2558" oppure "43°46\'10"N 11°15\'21"E".');
+  $('coordIn').blur();
+  setObserver(c);
 };
+$('detClouds').addEventListener('toggle', () => renderDynamic());
 window.addEventListener('resize', () => { renderStatic(); renderDynamic(); });
 
 // ---------- mappa ----------
@@ -89,10 +115,13 @@ map.on('load', () => {
 });
 map.on('click', (e) => setObserver({ lat: e.lngLat.lat, lon: e.lngLat.lng }));
 
-function setObserver(o) {
+function setObserver(o, { byUser = true } = {}) {
+  if (byUser) S.userMoved = true;
   S.obs = o; store.set('obs', o);
   map.flyTo({ center: [o.lon, o.lat], zoom: Math.max(map.getZoom(), 7.4), duration: 600 });
-  load();
+  showCalls();
+load();
+locatePhone(true);
 }
 
 const line = (pts) => ({ type: 'Feature', geometry: { type: 'LineString', coordinates: pts.map((p) => [p.lon, p.lat]) } });
@@ -121,6 +150,9 @@ function renderMapDynamic(frame) {
   if (!mapReady) return;
   const o = S.obs;
   const pts = [{ type: 'Feature', geometry: { type: 'Point', coordinates: [o.lon, o.lat] }, properties: { r: 6, c: '#f0643c' } }];
+  if (S.phone && (Math.abs(S.phone.lat - o.lat) > 1e-4 || Math.abs(S.phone.lon - o.lon) > 1e-4)) {
+    pts.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [S.phone.lon, S.phone.lat] }, properties: { r: 5, c: '#4ea1ff' } });
+  }
   if (!frame) {
     map.getSource('pts').setData(fc(pts));
     map.getSource('rayOn').setData(fc([])); map.getSource('rayOff').setData(fc([]));
@@ -146,7 +178,7 @@ function renderMapDynamic(frame) {
 // ---------- caricamento ----------
 async function load({ keepMeta = false } = {}) {
   const id = ++S.loadId;
-  S.trCache.clear(); S.weather = null; S.weatherErr = null; S.profile = null;
+  S.trCache.clear(); S.weather = null; S.weatherErr = null; S.profile = null; S.probs = []; S.cloudCache = null;
   $('coords').textContent = `${S.obs.lat.toFixed(4)}, ${S.obs.lon.toFixed(4)}`;
   progress(0.05);
   try {
@@ -212,9 +244,10 @@ async function loadWeather(id) {
   if (!S.win?.ok) return;
   S.weather = null; S.weatherErr = 'caricamento…'; renderDynamic();
   try {
-    // tre direzioni (inizio, evento, fine finestra); una sola se il Sole si sposta di poco
-    const [a0, a1] = S.azWin;
-    const dirs = a1 - a0 < 3 ? [S.azRef] : [a0, S.azRef, a1];
+    // direzioni su tutto il ventaglio del panorama, al più 12° l'una dall'altra
+    const a0 = S.profile.azMin, a1 = S.profile.azMax;
+    const nDir = Math.max(2, Math.ceil((a1 - a0) / 12) + 1);
+    const dirs = Array.from({ length: nDir }, (_, i) => a0 + ((a1 - a0) * i) / (nDir - 1));
     const res = await Promise.all(dirs.map((az) => fetchTransectClouds(S.obs, az, S.date, S.model)));
     if (id !== S.loadId) return;
     S.weather = {
@@ -223,13 +256,25 @@ async function loadWeather(id) {
       set: res.map((r, i) => ({ az: dirs[i], data: r })).sort((x, y) => x.az - y.az),
     };
     S.weatherErr = null;
+    computeProbs();
   } catch (e) {
     if (id !== S.loadId) return;
     S.weatherErr = e.message;
   }
   progress(1);
+  showCalls();
+  drawTimeline();
   renderDynamic();
 }
+
+// probabilità di disco visibile per ogni minuto in cui il terreno non lo copre
+function computeProbs() {
+  S.probs = S.minutes.map((m, i) => {
+    if (S.vis[i] !== 'on') return null;
+    return rayClear(cloudsAtAz(S.weather.set, m.az, m.t), S.h0, Math.max(m.el, 0)).P;
+  });
+}
+const probClass = (P) => (P == null ? null : P >= 0.7 ? 'libero' : P >= 0.3 ? 'incerto' : 'bloccato');
 
 // ---------- frame corrente ----------
 function currentFrame() {
@@ -240,12 +285,13 @@ function currentFrame() {
   if (!tr) { tr = transect(dem, S.obs, S.h0, key); S.trCache.set(key, tr); }
   const hit = m.el + SUN_SEMIDIAMETER > -2 ? rayTerrainHit(tr, m.el) : null;
   const hz = horizonAt(S.profile, m.az);
-  let snap = null, cross = [];
+  let snap = null, cross = [], clear = null;
   if (S.weather) {
     snap = cloudsAtAz(S.weather.set, m.az, m.t);
     cross = rayLayerCrossings(snap, S.h0, m.el, hit ? hit.d : Infinity);
+    if (S.vis[S.tIdx] === 'on') clear = rayClear(snap, S.h0, Math.max(m.el, 0));
   }
-  return { ...m, tr, hit, hz, snap, cross, state: S.vis[S.tIdx] };
+  return { ...m, tr, hit, hz, snap, cross, clear, state: S.vis[S.tIdx] };
 }
 
 // ---------- rendering ----------
@@ -268,7 +314,7 @@ function renderDynamic() {
   $('tEl').textContent = fmtDeg(f.el);
   $('tHz').textContent = fmtDeg(f.hz);
 
-  const v = $('verdict');
+  const v = $('vTerrain');
   if (f.state === 'on') {
     v.style.color = 'var(--ok)'; v.style.borderColor = '#2c5a3f';
     v.textContent = `Disco sopra l'orizzonte reale (margine ${(f.el + SUN_SEMIDIAMETER - f.hz).toFixed(2)}°)`;
@@ -279,6 +325,20 @@ function renderDynamic() {
   } else {
     v.style.color = 'var(--muted)'; v.style.borderColor = 'var(--line)';
     v.textContent = 'Sotto l\'orizzonte astronomico: illuminazione solo dal basso delle nubi';
+  }
+  $('verdict').style.borderColor = v.style.borderColor;
+  const vc = $('vCloud');
+  vc.textContent = '';
+  if (f.state === 'on') {
+    if (!S.weather) vc.textContent = S.weatherErr ? `Nubi: ${S.weatherErr}` : 'Nubi: caricamento…';
+    else if (f.clear?.P == null) vc.textContent = 'Nubi: nessun dato del modello lungo il raggio';
+    else {
+      const P = f.clear.P, cls = probClass(P), w = f.clear.worst;
+      vc.style.color = cls === 'libero' ? 'var(--ok)' : cls === 'incerto' ? 'var(--amber)' : 'var(--bad)';
+      const where = w && w.d < 3000 ? 'sopra di te' : w ? `a ${Math.round(w.d / 1000)} km` : '';
+      const why = cls !== 'libero' && w ? ` · nube più densa: ${w.layer.name} ${where} (${Math.round(w.c)}%)` : '';
+      vc.textContent = `Nubi: ${cls}, disco visibile ${Math.round(P * 100)}%${why}${f.el < 4 ? ' · sotto 4°: stima estrapolata' : ''}`;
+    }
   }
 
   const lines = [];
@@ -348,6 +408,8 @@ function drawPano(f) {
   ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(sx, sy, r * 6, 0, 7); ctx.fill();
   ctx.fillStyle = '#ffd98a'; ctx.beginPath(); ctx.arc(sx, sy, r, 0, 7); ctx.fill();
 
+  if (S.weather) drawPanoClouds(ctx, f, X, Y, a0, a1, e0, e1, w, h);
+
   // silhouette per fasce di distanza: lontano chiaro (prospettiva aerea), vicino scuro
   const shades = ['#0d1218', '#1a2330', '#2a3646', '#3f4d60', '#5a6a80'];
   for (let b = BANDS.length - 1; b >= 0; b--) {
@@ -369,6 +431,55 @@ function drawPano(f) {
   }
   for (let e = Math.ceil(e0); e <= e1; e += 2) ctx.fillText(`${e > 0 ? '+' : ''}${e}°`, 3, Y(e) + 3);
   $('panoInfo').textContent = `orizzonte max ${fmtDeg(hzMax)} · bande 5/20/60/150/300 km`;
+}
+
+/**
+ * Nubi ricostruite nel panorama: per ogni direzione (azimut) e angolo di elevazione si percorre la linea di vista
+ * nel campo di nubi interpolato e si disegna l'opacità 1 − P con lo stesso modello dei varchi usato per il verdetto.
+ * Così il disco solare appare coperto esattamente quanto dice la probabilità.
+ */
+function drawPanoClouds(ctx, f, X, Y, a0, a1, e0, e1, w, h) {
+  const key = `${S.tIdx}|${w}|${h}|${S.weather.model}`;
+  const elBase = Math.max(e0, -1);
+  if (!S.cloudCache || S.cloudCache.key !== key) {
+    const cols = Math.min(96, Math.round(w / 4)), rows = 56;
+    const dAz = (a1 - a0) / cols, dEl = (e1 - elBase) / rows;
+    const op = new Float32Array(cols * rows);
+    for (let i = 0; i < cols; i++) {
+      const az = a0 + (i + 0.5) * dAz;
+      const snap = cloudsAtAz(S.weather.set, az, f.t);
+      const hz = horizonAt(S.profile, az);
+      for (let j = 0; j < rows; j++) {
+        const el = e1 - (j + 0.5) * dEl;               // riga 0 = in alto
+        if (el < hz - 2 * dEl) continue;               // sotto il rilievo: non si vede
+        let Ssum = 0;
+        for (let dk = 0; dk <= 230; dk += 3) {
+          const z = rayAltitude(dk * 1000, S.h0, el);
+          if (z > LAYER_TOP) break;
+          if (z < 0) continue;
+          const lk = z < 3000 ? 'low' : z < 8000 ? 'mid' : 'high';
+          const c = coverAt(snap, dk * 1000, lk);
+          if (c != null) Ssum += Math.log(1 - Math.min(c, 99.5) / 100) * 3;
+        }
+        op[j * cols + i] = 1 - Math.exp(Ssum / GAP_L_KM);
+      }
+    }
+    S.cloudCache = { key, op, cols, rows };
+  }
+  const { op, cols, rows } = S.cloudCache;
+  // colore: nubi illuminate dal basso vicino al tramonto, grigie con Sole alto
+  // con Sole basso le nubi davanti al Sole appaiono in controluce (scure); dopo il tramonto si accendono dal basso
+  const rgb = f.el >= 6 ? [196, 205, 218] : f.el >= 0 ? [78, 84, 104] : [176, 96, 104];
+  const off = Object.assign(document.createElement('canvas'), { width: cols, height: rows });
+  const octx = off.getContext('2d');
+  const img = octx.createImageData(cols, rows);
+  for (let k = 0; k < op.length; k++) {
+    img.data[k * 4] = rgb[0]; img.data[k * 4 + 1] = rgb[1]; img.data[k * 4 + 2] = rgb[2];
+    img.data[k * 4 + 3] = Math.round(Math.min(1, op[k]) * 0.94 * 255);
+  }
+  octx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(off, X(a0), Y(e1), X(a1) - X(a0), Y(elBase) - Y(e1));
 }
 
 function drawSection(f) {
@@ -435,7 +546,12 @@ function drawTimeline() {
   if (!S.vis.length) return;
   const n = S.vis.length, bw = w / n;
   const col = { on: '#f5a524', terrain: '#5a2f33', below: '#1c2230' };
-  S.vis.forEach((v, i) => { ctx.fillStyle = col[v]; ctx.fillRect(i * bw, 13, bw + 0.6, h - 26); });
+  const pcol = { libero: '#f5a524', incerto: '#9a6a2c', bloccato: '#4a5566' };
+  S.vis.forEach((v, i) => {
+    const pc = v === 'on' && S.probs.length ? probClass(S.probs[i]) : null;
+    ctx.fillStyle = pc ? pcol[pc] : col[v];
+    ctx.fillRect(i * bw, 13, bw + 0.6, h - 26);
+  });
   ctx.fillStyle = '#8b98a8'; ctx.font = '10px ui-monospace, Menlo, monospace';
   const tz = S.tz;
   const iEv = S.minutes.findIndex((m) => m.t >= S.win.event);
@@ -475,4 +591,6 @@ function drawTimelineCursor() {
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
+showCalls();
 load();
+locatePhone(true);

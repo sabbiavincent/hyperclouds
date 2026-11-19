@@ -22,10 +22,32 @@ export const MODELS = [
 const FORECAST = 'https://api.open-meteo.com/v1/forecast';
 const HISTORICAL = 'https://historical-forecast-api.open-meteo.com/v1/forecast';
 
+// ---- Contatore approssimato delle chiamate Open-Meteo (peso = punti × ⌈giorni/14⌉ × ⌈variabili/10⌉) ----
+export const DAILY_LIMIT = 10000;
+const utcDay = () => new Date().toISOString().slice(0, 10);
+export function callCount() {
+  try { const c = JSON.parse(localStorage.getItem('hc.calls') || 'null'); return c && c.day === utcDay() ? c.n : 0; } catch { return 0; }
+}
+function countCall(url) {
+  try {
+    const q = new URL(url).searchParams;
+    const nLoc = (q.get('latitude') || '').split(',').length;
+    let days = +(q.get('forecast_days') || 0);
+    if (q.get('start_date') && q.get('end_date')) days = (Date.parse(q.get('end_date')) - Date.parse(q.get('start_date'))) / 86400000 + 1;
+    const nVar = ['hourly', 'daily', 'current'].reduce((a, k) => a + (q.get(k) ? q.get(k).split(',').length : 0), 0);
+    const w = nLoc * Math.max(1, Math.ceil(days / 14)) * Math.max(1, Math.ceil(nVar / 10));
+    localStorage.setItem('hc.calls', JSON.stringify({ day: utcDay(), n: callCount() + w }));
+  } catch {}
+}
+
 async function getJson(url) {
+  countCall(url);
   const r = await fetch(url);
   const j = await r.json().catch(() => null);
-  if (!r.ok) throw new Error(j?.reason || `HTTP ${r.status}`);
+  if (!r.ok) {
+    if (r.status === 429) throw new Error(`limite di chiamate Open-Meteo superato (${j?.reason || '429'}): riprova più tardi`);
+    throw new Error(j?.reason || `HTTP ${r.status}`);
+  }
   return j;
 }
 
@@ -131,7 +153,7 @@ export function cloudsAtAz(set, az, t) {
   return A.map((c, k) => ({ d: c.d, low: mix(c.low, B[k].low), mid: mix(c.mid, B[k].mid), high: mix(c.high, B[k].high) }));
 }
 
-function coverAt(snap, d, key) {
+export function coverAt(snap, d, key) {
   if (d <= snap[0].d) return snap[0][key];
   for (let i = 1; i < snap.length; i++) {
     if (d <= snap[i].d) {
@@ -164,4 +186,27 @@ export function rayLayerCrossings(snap, h0, el, stopDist = Infinity, k = DEFAULT
     if (from != null) out.push({ layer: L, from, to, mean: n ? sum / n : null, max });
   }
   return out;
+}
+
+// ---- Probabilità che il disco sia visibile (modello dei varchi, tarato su stazioni DWD) ----
+// P = exp( Σ ln(1 − c_i) · Δd / L ), con c_i copertura dello strato attraversato dal raggio.
+// Taratura: Norderney + Lindenberg, giu 2025 – mag 2026, ICON-D2, Sole 4–10°: L ≈ 50 km (validazione incrociata 50–60 km).
+export const GAP_L_KM = 50;
+export const LAYER_TOP = 13000;
+export function rayClear(snap, h0, el, stopDist = Infinity, k = DEFAULT_K, stepKm = 2, maxKm = 230) {
+  let S = 0, n = 0, worst = null;
+  for (let dk = 0; dk <= maxKm; dk += stepKm) {
+    const d = dk * 1000;
+    if (d > stopDist) break;
+    const z = rayAltitude(d, h0, el, k);
+    if (z > LAYER_TOP) break;
+    if (z < 0) continue;
+    const L = z < 3000 ? LAYERS[0] : z < 8000 ? LAYERS[1] : LAYERS[2];
+    const c = coverAt(snap, d, L.key);
+    if (c == null) continue;
+    n++;
+    S += Math.log(1 - Math.min(c, 99.5) / 100) * stepKm;
+    if (!worst || c > worst.c) worst = { layer: L, d, c };
+  }
+  return { P: n ? Math.exp(S / GAP_L_KM) : null, worst, n };
 }

@@ -46,6 +46,12 @@
   .tele div { text-align: center; }
   .tele b { display: block; font: 600 15px var(--mono); }
   #verdict { font: 13px var(--mono); padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+  #vCloud { margin-top: 3px; }
+  .legend { font-size: 10px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: -4px; }
+  #vCloud:empty { display: none; }
+  details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  #calls.warn { color: var(--bad); }
   #clouds { font: 12px var(--mono); color: var(--muted); margin-top: 6px; white-space: pre-line; }
   #status { font-size: 12px; color: var(--muted); min-height: 1.3em; }
   .ttl { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 10px 2px; }
@@ -80,6 +86,10 @@
       </div>
       <select id="model" class="grow"></select>
     </div>
+    <form class="row" id="coordForm" style="margin-top:6px">
+      <input id="coordIn" class="grow" placeholder="43.7696, 11.2558  oppure  43°46'10&quot;N 11°15'21&quot;E" autocomplete="off">
+      <button type="submit">Vai</button>
+    </form>
     <div class="row" style="margin-top:6px">
       <label class="label" for="hag">Altezza sul suolo</label>
       <input type="number" id="hag" value="2" min="0" max="3000" step="1" style="width:80px"> <span class="label">m</span>
@@ -94,6 +104,7 @@
 
   <div class="panel">
     <canvas id="timeline"></canvas>
+    <div class="legend"><i style="background:#f5a524"></i>libero <i style="background:#9a6a2c"></i>incerto <i style="background:#4a5566"></i>bloccato da nubi <i style="background:#5a2f33"></i>dietro il rilievo <i style="background:#1c2230"></i>sotto l'orizzonte</div>
     <input type="range" id="slider" min="0" max="60" value="0">
     <div class="tele">
       <div><span class="label" id="tLabel">Ora</span><b id="tTime">—</b></div>
@@ -101,19 +112,26 @@
       <div><span class="label">Elev. app.</span><b id="tEl">—</b></div>
       <div><span class="label">Orizzonte</span><b id="tHz">—</b></div>
     </div>
-    <div id="verdict">—</div>
-    <div id="clouds"></div>
+    <div id="verdict"><div id="vTerrain">—</div><div id="vCloud"></div></div>
   </div>
 
-  <div class="ttl"><span>Sezione lungo il raggio</span><span class="label" id="secInfo"></span></div>
-  <canvas id="section"></canvas>
+  <div class="panel">
+    <details id="detClouds">
+      <summary>Nubi lungo il raggio, sezione verticale e fonte</summary>
+      <div id="clouds"></div>
+      <div class="ttl" style="padding-left:0"><span class="label" id="secInfo"></span></div>
+      <canvas id="section"></canvas>
+    </details>
+  </div>
 
   <div class="panel">
     <details>
       <summary>Che cosa è calcolato e che cosa no</summary>
       <p><b>Calcolato e verificabile:</b> posizione del Sole (NOAA, verificata contro VSOP87), orizzonte reale da modello digitale del terreno (AWS Terrain Tiles, globale) con curvatura terrestre e rifrazione standard (k = 0,13), minuti in cui il bordo superiore del disco è sopra il rilievo. Il terreno entro 500 m dall'osservatore è escluso: lì il rumore del modello del terreno, gli edifici e gli alberi dominano, e l'ambiente immediato lo vedi da te.</p>
-      <p><b>Previsto:</b> copertura nuvolosa per strato (basse &lt; 3 km, medie 3–8 km, alte &gt; 8 km) da Open-Meteo, lungo l'azimut del tramonto/alba, interpolata nel tempo. Il programma mostra quali strati il raggio attraversa e con quale copertura: <i>non</i> stima ancora una probabilità di visibilità del disco né l'afterglow.</p>
+      <p><b>Previsto:</b> copertura nuvolosa per strato (basse &lt; 3 km, medie 3–8 km, alte &gt; 8 km) da Open-Meteo, su più direzioni nel ventaglio del panorama, interpolata in azimut e nel tempo. Le nubi del panorama sono ricostruite da questi dati (celle di 2–7 km, dati orari): indicano dove il raggio incontra nubi, non la loro forma reale.</p>
+      <p><b>Probabilità che il disco sia visibile:</b> P = exp(Σ ln(1−c)·Δd / L) lungo il raggio, con L = 50 km. Tarata su un anno di soleggiamento misurato ogni 10 minuti in due stazioni DWD (Norderney, Lindenberg) con previsioni ICON-D2 a breve scadenza: 3593 intervalli, Sole tra 4° e 10°; probabilità ben calibrate, errore ridotto del 55% rispetto alla climatologia. Limiti: scadenze di 24–48 h sono meno accurate; sotto 4° di elevazione la regola è estrapolata; taratura su pianura tedesca, non su Firenze. Fasce: libero ≥ 70%, incerto 30–70%, bloccato &lt; 30%. Nessuna stima dell'afterglow.</p>
       <p>Fonti: mappa © OpenStreetMap / OpenFreeMap / OpenMapTiles; terreno AWS Terrain Tiles; nubi Open-Meteo.</p>
+      <p id="calls"></p>
       <p>Date passate: si usa l'archivio delle previsioni (Historical Forecast API), utile per confronti con scatti già fatti.</p>
     </details>
   </div>
