@@ -7,7 +7,7 @@ import * as Astro from 'astronomy-engine';
 import { PNG } from 'pngjs';
 import { sunPosition, eventWindow, zonedDayStart, tzOffsetMs, formatLocal } from '../js/solar.js';
 import { elevationAngle, rayAltitude, effR, horizonDistanceToLayer } from '../js/geodesy.js';
-import { Dem, TERRARIUM_URL } from '../js/dem.js';
+import { Dem, TERRARIUM_URL, decodePng } from '../js/dem.js';
 import { horizonProfile, prefetchFan } from '../js/terrain.js';
 
 let fails = 0, passes = 0;
@@ -133,6 +133,19 @@ const nodeLoader = async (z, x, y) => {
   const best = hp.prof.reduce((a, b) => (b.horizon > a.horizon ? b : a));
   check('profilo d\'orizzonte calcolato senza tile mancanti', hp.missing === 0,
     `${hp.prof.length} azimut, ${dem.tiles.size} tile, ${((Date.now() - t0) / 1000).toFixed(1)} s; orizzonte max ${best.horizon.toFixed(2)}° a az ${best.az}° (${(best.peak.d / 1000).toFixed(1)} km, ${best.peak.h.toFixed(0)} m)`);
+}
+
+// ---------- 8. Decodifica PNG pura (senza canvas) identica a pngjs ----------
+{
+  const tiles = [[10, 544, 373], [12, 2176, 1494], [8, 136, 93]];
+  let same = true, info = [];
+  for (const [z, x, y] of tiles) {
+    const buf = Buffer.from(await (await fetch(TERRARIUM_URL(z, x, y))).arrayBuffer());
+    const ref = PNG.sync.read(buf), mine = await decodePng(buf);
+    const eq = ref.width === mine.width && ref.data.length === mine.data.length && ref.data.every((v, i) => v === mine.data[i]);
+    same = same && eq; info.push(`${z}/${x}/${y}:${eq ? '=' : '≠'}`);
+  }
+  check('decodifica PNG JS identica bit per bit a pngjs', same, info.join(' '));
 }
 
 console.log(`\n${passes} superati, ${fails} falliti`);

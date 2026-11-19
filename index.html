@@ -52,6 +52,13 @@
   .ttl span:first-child { font-weight: 600; }
   details { color: var(--muted); font-size: 12px; }
   details p { margin: .4em 0; }
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl { margin: 0 4px 4px 0; }
+  .maplibregl-ctrl-attrib.maplibregl-compact { min-height: 18px; padding: 0; background: rgba(11,15,20,.6); }
+  .maplibregl-ctrl-attrib.maplibregl-compact:not(.maplibregl-compact-show) .maplibregl-ctrl-attrib-inner { display: none; }
+  .maplibregl-ctrl-attrib.maplibregl-compact-show { padding: 2px 22px 2px 6px; font-size: 10px; background: rgba(255,255,255,.85); }
+  .maplibregl-ctrl-attrib-button { width: 18px !important; height: 18px !important; background-size: 14px !important;
+    background-position: center !important; opacity: .55; filter: invert(1); }
+  .maplibregl-compact-show .maplibregl-ctrl-attrib-button { filter: none; }
   .bar { height: 3px; background: linear-gradient(90deg, var(--amber), var(--ember)); width: 0; transition: width .2s; }
 </style>
 </head>
@@ -106,6 +113,7 @@
       <summary>Che cosa è calcolato e che cosa no</summary>
       <p><b>Calcolato e verificabile:</b> posizione del Sole (NOAA, verificata contro VSOP87), orizzonte reale da modello digitale del terreno (AWS Terrain Tiles, globale) con curvatura terrestre e rifrazione standard (k = 0,13), minuti in cui il bordo superiore del disco è sopra il rilievo. Il terreno entro 500 m dall'osservatore è escluso: lì il rumore del modello del terreno, gli edifici e gli alberi dominano, e l'ambiente immediato lo vedi da te.</p>
       <p><b>Previsto:</b> copertura nuvolosa per strato (basse &lt; 3 km, medie 3–8 km, alte &gt; 8 km) da Open-Meteo, lungo l'azimut del tramonto/alba, interpolata nel tempo. Il programma mostra quali strati il raggio attraversa e con quale copertura: <i>non</i> stima ancora una probabilità di visibilità del disco né l'afterglow.</p>
+      <p>Fonti: mappa © OpenStreetMap / OpenFreeMap / OpenMapTiles; terreno AWS Terrain Tiles; nubi Open-Meteo.</p>
       <p>Date passate: si usa l'archivio delle previsioni (Historical Forecast API), utile per confronti con scatti già fatti.</p>
     </details>
   </div>

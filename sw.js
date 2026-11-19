@@ -1,5 +1,5 @@
 // Service worker minimo: rete prima, cache dei file dell'app come riserva offline.
-const CACHE = 'hc-v1';
+const CACHE = 'hc-v2';
 self.addEventListener('install', (e) => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', (e) => {

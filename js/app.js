@@ -67,8 +67,11 @@ window.addEventListener('resize', () => { renderStatic(); renderDynamic(); });
 // ---------- mappa ----------
 const map = new maplibregl.Map({
   container: 'map', style: 'https://tiles.openfreemap.org/styles/dark',
-  center: [S.obs.lon, S.obs.lat], zoom: 7.4, attributionControl: { compact: true },
+  center: [S.obs.lon, S.obs.lat], zoom: 7.4, attributionControl: false,
 });
+// Attribuzione dovuta (OpenStreetMap/OpenFreeMap) ridotta a icona: si espande al tocco.
+map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+map.once('idle', () => document.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show'));
 let mapReady = false;
 map.on('load', () => {
   const empty = { type: 'FeatureCollection', features: [] };

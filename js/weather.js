@@ -11,6 +11,7 @@ export const LAYERS = [
 
 export const MODELS = [
   { id: 'best_match', label: 'Automatico (migliore disponibile)' },
+  { id: 'icon_seamless', label: 'ICON combinato (D2 → EU → globale)' },
   { id: 'icon_d2', label: 'ICON-D2 2,2 km (Europa centrale, 48 h)' },
   { id: 'icon_eu', label: 'ICON-EU 7 km (Europa)' },
   { id: 'meteofrance_seamless', label: 'Météo-France AROME/ARPEGE' },
@@ -61,15 +62,34 @@ export async function fetchTransectClouds(obs, az, dateStr, model = 'best_match'
   });
   if (model !== 'best_match') q.set('models', model);
   const ageDays = (Date.now() - Date.parse(dateStr + 'T00:00:00Z')) / 86400000;
-  let j, source = 'previsione';
-  try {
-    if (ageDays > 60) throw new Error('archivio');
-    j = await getJson(`${FORECAST}?${q}`);
-  } catch (e) {
-    j = await getJson(`${HISTORICAL}?${q}`);
-    source = 'archivio previsioni';
+  const hosts = ageDays > 60 ? [[HISTORICAL, 'archivio previsioni']] : [[FORECAST, 'previsione'], [HISTORICAL, 'archivio previsioni']];
+  let arr = null, source = '', partial = 0, lastErr = null;
+  for (const [host, label] of hosts) {
+    try {
+      const j = await getJson(`${host}?${q}`);
+      arr = Array.isArray(j) ? j : [j]; source = label; break;
+    } catch (e) {
+      lastErr = e;
+      // Il modello rifiuta l'intera richiesta se alcuni punti sono fuori dominio: si chiede punto per punto.
+      if (/no data/i.test(e.message)) {
+        const one = await Promise.allSettled(pts.map((p) => {
+          const q1 = new URLSearchParams(q);
+          q1.set('latitude', p.lat.toFixed(4)); q1.set('longitude', p.lon.toFixed(4));
+          return getJson(`${host}?${q1}`).then((v) => (Array.isArray(v) ? v[0] : v));
+        }));
+        const ok = one.find((r) => r.status === 'fulfilled');
+        if (ok) {
+          const times = ok.value.hourly.time, nul = times.map(() => null);
+          partial = one.filter((r) => r.status !== 'fulfilled').length;
+          arr = one.map((r) => (r.status === 'fulfilled' ? r.value
+            : { hourly: { time: times, cloud_cover_low: nul, cloud_cover_mid: nul, cloud_cover_high: nul } }));
+          source = label; break;
+        }
+      }
+    }
   }
-  const arr = Array.isArray(j) ? j : [j];
+  if (!arr) throw lastErr;
+  if (partial) source += ` · ${partial}/${n} punti fuori dominio`;
   const cols = arr.map((loc, i) => ({
     d: pts[i].d, lat: pts[i].lat, lon: pts[i].lon,
     times: loc.hourly.time.map((t) => t * 1000),

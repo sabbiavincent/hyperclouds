@@ -6,19 +6,64 @@ import { tileCoord } from './geodesy.js';
 export const TERRARIUM_URL = (z, x, y) =>
   `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
 
+// Decodifica PNG in JavaScript puro (senza canvas): i browser che proteggono dal fingerprinting
+// (Firefox in modalità rigorosa, Brave, Tor) alterano i pixel letti da un canvas, e qui un'unità
+// sul canale rosso vale 256 m di quota. Inflate nativo via DecompressionStream, poi de-filtraggio.
+export async function decodePng(buf) {
+  const u8 = new Uint8Array(buf);
+  const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+  if (!sig.every((b, i) => u8[i] === b)) throw new Error('non è un PNG');
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  let pos = 8, width = 0, height = 0, depth = 0, ctype = 0, interlace = 0;
+  const idat = [];
+  while (pos < u8.length) {
+    const len = dv.getUint32(pos), type = String.fromCharCode(...u8.subarray(pos + 4, pos + 8));
+    const data = u8.subarray(pos + 8, pos + 8 + len);
+    if (type === 'IHDR') {
+      width = dv.getUint32(pos + 8); height = dv.getUint32(pos + 12);
+      depth = data[8]; ctype = data[9]; interlace = data[12];
+    } else if (type === 'IDAT') idat.push(data);
+    else if (type === 'IEND') break;
+    pos += 12 + len;
+  }
+  const channels = { 0: 1, 2: 3, 4: 2, 6: 4 }[ctype];
+  if (depth !== 8 || !channels || interlace) throw new Error(`PNG non supportato (bit ${depth}, tipo ${ctype}, interlacciato ${interlace})`);
+  const stream = new Blob(idat).stream().pipeThrough(new DecompressionStream('deflate'));
+  const raw = new Uint8Array(await new Response(stream).arrayBuffer());
+  const bpp = channels, stride = width * bpp;
+  const px = new Uint8Array(height * stride);
+  for (let y = 0; y < height; y++) {
+    const f = raw[y * (stride + 1)], src = y * (stride + 1) + 1, dst = y * stride, up = dst - stride;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? px[dst + x - bpp] : 0;
+      const b = y > 0 ? px[up + x] : 0;
+      const c = x >= bpp && y > 0 ? px[up + x - bpp] : 0;
+      let v = raw[src + x];
+      if (f === 1) v += a;
+      else if (f === 2) v += b;
+      else if (f === 3) v += (a + b) >> 1;
+      else if (f === 4) {
+        const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+        v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+      }
+      px[dst + x] = v & 255;
+    }
+  }
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0, j = 0; i < width * height; i++, j += bpp) {
+    const o = i * 4;
+    if (channels >= 3) { rgba[o] = px[j]; rgba[o + 1] = px[j + 1]; rgba[o + 2] = px[j + 2]; }
+    else rgba[o] = rgba[o + 1] = rgba[o + 2] = px[j];
+    rgba[o + 3] = channels === 4 ? px[j + 3] : channels === 2 ? px[j + 1] : 255;
+  }
+  return { width, height, data: rgba };
+}
+
 // Loader per il browser: restituisce {width, height, data: Uint8ClampedArray RGBA}
 export async function browserTileLoader(z, x, y) {
   const res = await fetch(TERRARIUM_URL(z, x, y), { mode: 'cors' });
   if (!res.ok) throw new Error(`DEM ${z}/${x}/${y}: HTTP ${res.status}`);
-  const blob = await res.blob();
-  const bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
-  const c = typeof OffscreenCanvas !== 'undefined'
-    ? new OffscreenCanvas(bmp.width, bmp.height)
-    : Object.assign(document.createElement('canvas'), { width: bmp.width, height: bmp.height });
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(bmp, 0, 0);
-  const img = ctx.getImageData(0, 0, bmp.width, bmp.height);
-  return { width: img.width, height: img.height, data: img.data };
+  return decodePng(await res.arrayBuffer());
 }
 
 export class Dem {
