@@ -1,0 +1,463 @@
+import { sunPosition, eventWindow, zonedDayStart, formatLocal, SUN_SEMIDIAMETER } from './solar.js';
+import { destination, rayAltitude, horizonDistanceToLayer, DEFAULT_K } from './geodesy.js';
+import { Dem, browserTileLoader } from './dem.js';
+import { prefetchFan, horizonProfile, horizonAt, transect, rayTerrainHit, BANDS, MAX_DIST } from './terrain.js';
+import { fetchMeta, fetchTransectClouds, cloudsAt, rayLayerCrossings, LAYERS, MODELS } from './weather.js';
+
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('hc.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('hc.' + k, JSON.stringify(v)); } catch {} },
+};
+
+const dem = new Dem(browserTileLoader);
+const S = {
+  obs: store.get('obs', { lat: 43.7629, lon: 11.2650 }),
+  type: store.get('type', 'sunset'),
+  model: store.get('model', 'best_match'),
+  hag: store.get('hag', 2),
+  date: null, tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  h0: null, win: null, profile: null, azRef: 0, weather: null, weatherErr: null,
+  minutes: [], vis: [], tIdx: 0, trCache: new Map(), loadId: 0,
+};
+
+// ---------- utilità ----------
+const unwrap = (a, ref) => ref + ((((a - ref) % 360) + 540) % 360) - 180;
+const fmtDeg = (x, d = 2) => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(d) + '°';
+const todayIn = (tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());
+const status = (s) => { $('status').textContent = s; };
+const progress = (f) => { $('bar').style.width = `${Math.round(f * 100)}%`; if (f >= 1) setTimeout(() => ($('bar').style.width = '0'), 400); };
+
+function setupCanvas(c) {
+  const dpr = window.devicePixelRatio || 1, r = c.getBoundingClientRect();
+  if (c.width !== Math.round(r.width * dpr) || c.height !== Math.round(r.height * dpr)) {
+    c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
+  }
+  const ctx = c.getContext('2d', c.id === 'timeline' ? { willReadFrequently: true } : undefined);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w: r.width, h: r.height };
+}
+
+// ---------- controlli ----------
+MODELS.forEach((m) => $('model').add(new Option(m.label, m.id, false, m.id === S.model)));
+$('hag').value = S.hag;
+document.querySelectorAll('#event button').forEach((b) => {
+  b.classList.toggle('on', b.dataset.v === S.type);
+  b.onclick = () => {
+    S.type = b.dataset.v; store.set('type', S.type);
+    document.querySelectorAll('#event button').forEach((x) => x.classList.toggle('on', x === b));
+    load();
+  };
+});
+$('model').onchange = () => { S.model = $('model').value; store.set('model', S.model); loadWeather(S.loadId); };
+$('date').onchange = () => { S.date = $('date').value; load({ keepMeta: true }); };
+$('hag').onchange = () => { S.hag = Math.max(0, +$('hag').value || 0); store.set('hag', S.hag); load({ keepMeta: true }); };
+$('reload').onclick = () => load({ keepMeta: true });
+$('slider').oninput = () => { S.tIdx = +$('slider').value; renderDynamic(); };
+$('gps').onclick = () => {
+  if (!navigator.geolocation) return status('Geolocalizzazione non disponibile in questo browser.');
+  status('Richiesta posizione GPS…');
+  navigator.geolocation.getCurrentPosition(
+    (p) => setObserver({ lat: p.coords.latitude, lon: p.coords.longitude }),
+    (e) => status(`GPS non disponibile: ${e.message}`),
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+};
+window.addEventListener('resize', () => { renderStatic(); renderDynamic(); });
+
+// ---------- mappa ----------
+const map = new maplibregl.Map({
+  container: 'map', style: 'https://tiles.openfreemap.org/styles/dark',
+  center: [S.obs.lon, S.obs.lat], zoom: 7.4, attributionControl: { compact: true },
+});
+let mapReady = false;
+map.on('load', () => {
+  const empty = { type: 'FeatureCollection', features: [] };
+  for (const id of ['fan', 'rings', 'rayOn', 'rayOff', 'pts']) map.addSource(id, { type: 'geojson', data: empty });
+  map.addLayer({ id: 'fan', type: 'fill', source: 'fan', paint: { 'fill-color': '#f5a524', 'fill-opacity': 0.10 } });
+  map.addLayer({ id: 'rings', type: 'line', source: 'rings',
+    paint: { 'line-color': ['get', 'c'], 'line-width': 1, 'line-dasharray': [3, 3], 'line-opacity': 0.7 } });
+  map.addLayer({ id: 'rayOff', type: 'line', source: 'rayOff',
+    paint: { 'line-color': '#6b7787', 'line-width': 1.5, 'line-dasharray': [2, 2] } });
+  map.addLayer({ id: 'rayOn', type: 'line', source: 'rayOn', paint: { 'line-color': '#f5a524', 'line-width': 2.6 } });
+  map.addLayer({ id: 'pts', type: 'circle', source: 'pts',
+    paint: { 'circle-radius': ['get', 'r'], 'circle-color': ['get', 'c'], 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
+  mapReady = true;
+  renderMapStatic(); renderMapDynamic();
+});
+map.on('click', (e) => setObserver({ lat: e.lngLat.lat, lon: e.lngLat.lng }));
+
+function setObserver(o) {
+  S.obs = o; store.set('obs', o);
+  map.flyTo({ center: [o.lon, o.lat], zoom: Math.max(map.getZoom(), 7.4), duration: 600 });
+  load();
+}
+
+const line = (pts) => ({ type: 'Feature', geometry: { type: 'LineString', coordinates: pts.map((p) => [p.lon, p.lat]) } });
+const fc = (features) => ({ type: 'FeatureCollection', features });
+
+function renderMapStatic() {
+  if (!mapReady || !S.win?.ok || !S.profile) return;
+  const o = S.obs;
+  const a0 = S.azWin[0], a1 = S.azWin[1];
+  const ring = [o];
+  for (let i = 0; i <= 24; i++) ring.push(destination(o.lat, o.lon, MAX_DIST, a0 + ((a1 - a0) * i) / 24));
+  ring.push(o);
+  map.getSource('fan').setData(fc([{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring.map((p) => [p.lon, p.lat])] } }]));
+  // anelli: dove ciascuno strato incontra l'orizzonte (raggio orizzontale)
+  const cols = { low: '#9fb3c8', mid: '#c7d4e2', high: '#ffd2a8' };
+  const rings = [3000, 8000].map((h, i) => {
+    const r = horizonDistanceToLayer(S.h0, h);
+    const pts = [];
+    for (let az = 0; az <= 360; az += 4) pts.push(destination(o.lat, o.lon, r, az));
+    return { ...line(pts), properties: { c: Object.values(cols)[i + 1] } };
+  });
+  map.getSource('rings').setData(fc(rings));
+}
+
+function renderMapDynamic(frame) {
+  if (!mapReady) return;
+  const o = S.obs;
+  const pts = [{ type: 'Feature', geometry: { type: 'Point', coordinates: [o.lon, o.lat] }, properties: { r: 6, c: '#f0643c' } }];
+  if (!frame) {
+    map.getSource('pts').setData(fc(pts));
+    map.getSource('rayOn').setData(fc([])); map.getSource('rayOff').setData(fc([]));
+    return;
+  }
+  const stop = frame.hit ? frame.hit.d : MAX_DIST;
+  const on = [], off = [];
+  for (let d = 0; d <= MAX_DIST; d += 5000) {
+    const p = destination(o.lat, o.lon, d, frame.az);
+    if (d <= stop) on.push(p); if (d >= stop - 5000) off.push(p);
+  }
+  if (frame.hit) {
+    on.push({ lat: frame.hit.lat, lon: frame.hit.lon });
+    pts.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [frame.hit.lon, frame.hit.lat] }, properties: { r: 5, c: '#f2777a' } });
+  } else if (frame.tr.peak) {
+    pts.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [frame.tr.peak.lon, frame.tr.peak.lat] }, properties: { r: 4, c: '#8b98a8' } });
+  }
+  map.getSource('rayOn').setData(fc(on.length > 1 ? [line(on)] : []));
+  map.getSource('rayOff').setData(fc(frame.hit && off.length > 1 ? [line(off)] : []));
+  map.getSource('pts').setData(fc(pts));
+}
+
+// ---------- caricamento ----------
+async function load({ keepMeta = false } = {}) {
+  const id = ++S.loadId;
+  S.trCache.clear(); S.weather = null; S.weatherErr = null; S.profile = null;
+  $('coords').textContent = `${S.obs.lat.toFixed(4)}, ${S.obs.lon.toFixed(4)}`;
+  progress(0.05);
+  try {
+    if (!keepMeta || !S.metaFor || S.metaFor !== `${S.obs.lat},${S.obs.lon}`) {
+      status('Fuso orario del luogo…');
+      try {
+        const m = await fetchMeta(S.obs.lat, S.obs.lon);
+        if (id !== S.loadId) return;
+        S.tz = m.tz; S.metaFor = `${S.obs.lat},${S.obs.lon}`;
+      } catch (e) { status(`Open-Meteo non raggiungibile (${e.message}): uso il fuso del telefono.`); }
+    }
+    if (!S.date) { S.date = todayIn(S.tz); $('date').value = S.date; }
+
+    const day0 = zonedDayStart(S.date, S.tz);
+    S.win = eventWindow(day0, S.obs.lat, S.obs.lon, S.type);
+    if (!S.win.ok) { status(S.win.reason); renderAllEmpty(); progress(1); return; }
+
+    status('Quota del punto…');
+    const g = await dem.elevation(S.obs.lat, S.obs.lon, 13);
+    if (id !== S.loadId) return;
+    if (g == null) throw new Error('modello del terreno non raggiungibile');
+    S.h0 = g + S.hag;
+
+    // azimut della finestra (gestione del passaggio per 0/360)
+    S.azRef = sunPosition(S.win.event, S.obs.lat, S.obs.lon).az;
+    S.minutes = [];
+    for (let t = S.win.start; t <= S.win.end; t += 60000) {
+      const p = sunPosition(t, S.obs.lat, S.obs.lon);
+      S.minutes.push({ t, az: unwrap(p.az, S.azRef), el: p.el });
+    }
+    const azs = S.minutes.map((m) => m.az);
+    S.azWin = [Math.min(...azs), Math.max(...azs)];
+    let a0 = S.azWin[0] - 8, a1 = S.azWin[1] + 8;
+    if (a1 - a0 < 28) { const c = (a0 + a1) / 2; a0 = c - 14; a1 = c + 14; }
+    a0 = Math.floor(a0 * 2) / 2; a1 = Math.ceil(a1 * 2) / 2;
+
+    status('Terreno: scarico il modello digitale…');
+    await prefetchFan(dem, S.obs, a0, a1, 0.5, (d, n) => { if (id === S.loadId) progress(0.1 + 0.7 * d / n); });
+    if (id !== S.loadId) return;
+    status('Calcolo dell\'orizzonte reale…');
+    await new Promise((r) => setTimeout(r, 0));
+    S.profile = horizonProfile(dem, S.obs, S.h0, a0, a1, 0.5);
+    S.vis = S.minutes.map((m) => {
+      const hz = horizonAt(S.profile, m.az);
+      return m.el + SUN_SEMIDIAMETER > hz ? 'on' : m.el + SUN_SEMIDIAMETER > 0 ? 'terrain' : 'below';
+    });
+
+    // slider: parte dall'evento
+    $('slider').max = S.minutes.length - 1;
+    S.tIdx = Math.max(0, S.minutes.findIndex((m) => m.t >= S.win.event));
+    $('slider').value = S.tIdx;
+    progress(0.85);
+    renderStatic(); renderDynamic(); renderMapStatic();
+    const miss = S.profile.missing ? ` · ${S.profile.missing} campioni senza dati del terreno` : '';
+    status(`Fuso ${S.tz}${S.win.notes.length ? ' · ' + S.win.notes.join('; ') : ''}${miss}`);
+    loadWeather(id);
+  } catch (e) {
+    if (id === S.loadId) { status(`Errore: ${e.message}`); progress(1); }
+  }
+}
+
+async function loadWeather(id) {
+  if (!S.win?.ok) return;
+  S.weather = null; S.weatherErr = 'caricamento…'; renderDynamic();
+  try {
+    const w = await fetchTransectClouds(S.obs, S.azRef, S.date, S.model);
+    if (id !== S.loadId) return;
+    S.weather = w; S.weatherErr = null;
+  } catch (e) {
+    if (id !== S.loadId) return;
+    S.weatherErr = e.message;
+  }
+  progress(1);
+  renderDynamic();
+}
+
+// ---------- frame corrente ----------
+function currentFrame() {
+  if (!S.profile || !S.minutes.length) return null;
+  const m = S.minutes[Math.min(S.tIdx, S.minutes.length - 1)];
+  const key = Math.round(m.az * 10) / 10;
+  let tr = S.trCache.get(key);
+  if (!tr) { tr = transect(dem, S.obs, S.h0, key); S.trCache.set(key, tr); }
+  const hit = m.el + SUN_SEMIDIAMETER > -2 ? rayTerrainHit(tr, m.el) : null;
+  const hz = horizonAt(S.profile, m.az);
+  let snap = null, cross = [];
+  if (S.weather) {
+    snap = cloudsAt(S.weather, m.t);
+    cross = rayLayerCrossings(snap, S.h0, m.el, hit ? hit.d : Infinity);
+  }
+  return { ...m, tr, hit, hz, snap, cross, state: S.vis[S.tIdx] };
+}
+
+// ---------- rendering ----------
+function renderAllEmpty() {
+  for (const id of ['pano', 'section', 'timeline']) { const { ctx, w, h } = setupCanvas($(id)); ctx.clearRect(0, 0, w, h); }
+  $('verdict').textContent = '—'; $('clouds').textContent = '';
+  renderMapDynamic(null);
+}
+
+function renderStatic() { drawTimeline(); }
+
+function renderDynamic() {
+  const f = currentFrame();
+  if (!f) return;
+  const tz = S.tz;
+  const dMin = Math.round((f.t - S.win.event) / 60000);
+  $('tLabel').textContent = `Ora (${dMin >= 0 ? '+' : '−'}${Math.abs(dMin)} min)`;
+  $('tTime').textContent = formatLocal(f.t, tz);
+  $('tAz').textContent = (((f.az % 360) + 360) % 360).toFixed(1) + '°';
+  $('tEl').textContent = fmtDeg(f.el);
+  $('tHz').textContent = fmtDeg(f.hz);
+
+  const v = $('verdict');
+  if (f.state === 'on') {
+    v.style.color = 'var(--ok)'; v.style.borderColor = '#2c5a3f';
+    v.textContent = `Disco sopra l'orizzonte reale (margine ${(f.el + SUN_SEMIDIAMETER - f.hz).toFixed(2)}°)`;
+  } else if (f.state === 'terrain') {
+    v.style.color = 'var(--bad)'; v.style.borderColor = '#6a3335';
+    const p = f.tr.peak;
+    v.textContent = `Dietro il rilievo: cresta a ${(p.d / 1000).toFixed(1)} km (${Math.round(p.h)} m), orizzonte ${fmtDeg(f.hz)}`;
+  } else {
+    v.style.color = 'var(--muted)'; v.style.borderColor = 'var(--line)';
+    v.textContent = 'Sotto l\'orizzonte astronomico: illuminazione solo dal basso delle nubi';
+  }
+
+  const lines = [];
+  if (S.weatherErr && !S.weather) lines.push(`Nubi: ${S.weatherErr}`);
+  if (S.weather) {
+    if (f.hit && f.hit.d < 30000) {
+      lines.push(`Raggio fermato dal rilievo a ${(f.hit.d / 1000).toFixed(1)} km: le nubi oltre non incidono sul disco.`);
+    } else if (!f.cross.length) lines.push('Il raggio non attraversa strati entro 300 km.');
+    else for (const c of f.cross) {
+      const cov = c.mean == null ? 'n.d. (fuori dominio del modello)' : `media ${Math.round(c.mean)}%, max ${Math.round(c.max)}%`;
+      lines.push(`Nubi ${c.layer.name.padEnd(6)} ${String(Math.round(c.from / 1000)).padStart(3)}–${String(Math.round(c.to / 1000)).padStart(3)} km · ${cov}`);
+    }
+    const ml = MODELS.find((m) => m.id === S.weather.model)?.label ?? S.weather.model;
+    lines.push(`Fonte: ${ml} · ${S.weather.source} · azimut fisso ${(((S.azRef % 360) + 360) % 360).toFixed(0)}°`);
+  }
+  $('clouds').textContent = lines.join('\n');
+
+  drawPano(f); drawSection(f); drawTimelineCursor(f);
+  renderMapDynamic(f);
+}
+
+function skyColors(el) {
+  // gradiente cielo in funzione dell'elevazione solare (solo resa visiva)
+  if (el > 6) return ['#1d3a5f', '#6b9ac4'];
+  if (el > 0) return ['#24375a', '#e8a35a'];
+  if (el > -3) return ['#1f2a4a', '#d9705a'];
+  if (el > -6) return ['#161d36', '#8c4b62'];
+  return ['#0b0f1c', '#2a2342'];
+}
+
+function drawPano(f) {
+  const { ctx, w, h } = setupCanvas($('pano'));
+  const P = S.profile;
+  const a0 = P.azMin, a1 = P.azMax;
+  const hzMax = Math.max(...P.prof.map((p) => p.horizon));
+  const hzMin = Math.min(...P.prof.map((p) => p.horizon));
+  const e0 = Math.min(-1.5, hzMin - 0.6);
+  const e1 = Math.max(7, hzMax + 1.5);
+  const X = (az) => ((az - a0) / (a1 - a0)) * w;
+  const Y = (el) => h - 18 - ((el - e0) / (e1 - e0)) * (h - 26);
+
+  const [top, bottom] = skyColors(f.el);
+  const g = ctx.createLinearGradient(0, 0, 0, Y(e0));
+  g.addColorStop(0, top); g.addColorStop(1, bottom);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+
+  // orizzonte astronomico
+  ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, Y(0)); ctx.lineTo(w, Y(0)); ctx.stroke(); ctx.setLineDash([]);
+
+  // percorso del Sole nella finestra
+  ctx.strokeStyle = 'rgba(255,214,140,.55)'; ctx.lineWidth = 1.2; ctx.setLineDash([2, 3]);
+  ctx.beginPath();
+  S.minutes.forEach((m, i) => (i ? ctx.lineTo(X(m.az), Y(m.el)) : ctx.moveTo(X(m.az), Y(m.el))));
+  ctx.stroke(); ctx.setLineDash([]);
+
+  // disco solare (dimensione reale in scala verticale, minimo 3 px)
+  const r = Math.max(3, (SUN_SEMIDIAMETER / (e1 - e0)) * (h - 26));
+  const sx = X(f.az), sy = Y(f.el);
+  const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 6);
+  glow.addColorStop(0, f.state === 'on' ? 'rgba(255,200,110,.75)' : 'rgba(255,170,110,.25)');
+  glow.addColorStop(1, 'rgba(255,170,110,0)');
+  ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(sx, sy, r * 6, 0, 7); ctx.fill();
+  ctx.fillStyle = '#ffd98a'; ctx.beginPath(); ctx.arc(sx, sy, r, 0, 7); ctx.fill();
+
+  // silhouette per fasce di distanza: lontano chiaro (prospettiva aerea), vicino scuro
+  const shades = ['#0d1218', '#1a2330', '#2a3646', '#3f4d60', '#5a6a80'];
+  for (let b = BANDS.length - 1; b >= 0; b--) {
+    ctx.fillStyle = shades[b];
+    ctx.beginPath(); ctx.moveTo(0, h);
+    P.prof.forEach((p) => ctx.lineTo(X(p.az), Y(Math.max(e0 - 1, p.bands[b]))));
+    ctx.lineTo(w, h); ctx.closePath(); ctx.fill();
+  }
+  // linea d'orizzonte reale
+  ctx.strokeStyle = 'rgba(245,165,36,.55)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  P.prof.forEach((p, i) => (i ? ctx.lineTo(X(p.az), Y(p.horizon)) : ctx.moveTo(X(p.az), Y(p.horizon))));
+  ctx.stroke();
+
+  // scale
+  ctx.fillStyle = 'rgba(230,237,243,.75)'; ctx.font = '10px ui-monospace, Menlo, monospace';
+  for (let a = Math.ceil(a0 / 5) * 5; a <= a1; a += 5) {
+    ctx.fillText(`${(((a % 360) + 360) % 360)}°`, X(a) - 10, h - 4);
+  }
+  for (let e = Math.ceil(e0); e <= e1; e += 2) ctx.fillText(`${e > 0 ? '+' : ''}${e}°`, 3, Y(e) + 3);
+  $('panoInfo').textContent = `orizzonte max ${fmtDeg(hzMax)} · bande 5/20/60/150/300 km`;
+}
+
+function drawSection(f) {
+  const { ctx, w, h } = setupCanvas($('section'));
+  const L = 34, R = 8, T = 8, B = 18;
+  const pw = w - L - R, ph = h - T - B;
+  const maxKm = 300, maxAlt = 12000;
+  const X = (d) => L + (d / 1000 / maxKm) * pw;
+  const Y = (z) => T + ph - (Math.min(maxAlt, Math.max(0, z)) / maxAlt) * ph;
+  ctx.fillStyle = '#0b0f14'; ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#0f151d'; ctx.fillRect(L, T, pw, ph);
+
+  // nubi (celle tra colonne Open-Meteo)
+  if (f.snap) {
+    const inCross = (key, d0, d1) => f.cross.some((c) => c.layer.key === key && d1 >= c.from && d0 <= c.to);
+    for (let i = 0; i < f.snap.length - 1; i++) {
+      const c0 = f.snap[i], c1 = f.snap[i + 1];
+      for (const Lr of LAYERS) {
+        const v0 = c0[Lr.key], v1 = c1[Lr.key];
+        if (v0 == null && v1 == null) continue;
+        const cov = ((v0 ?? v1) + (v1 ?? v0)) / 200;
+        if (cov < 0.03) continue;
+        ctx.fillStyle = inCross(Lr.key, c0.d, c1.d)
+          ? `rgba(255,190,140,${0.12 + cov * 0.5})` : `rgba(200,212,226,${0.08 + cov * 0.42})`;
+        ctx.fillRect(X(c0.d), Y(Math.min(Lr.top, maxAlt)), X(c1.d) - X(c0.d) + 0.5, Y(Lr.bottom) - Y(Math.min(Lr.top, maxAlt)));
+      }
+    }
+  }
+  // griglia
+  ctx.strokeStyle = '#1f2733'; ctx.lineWidth = 1; ctx.fillStyle = '#8b98a8'; ctx.font = '10px ui-monospace, Menlo, monospace';
+  for (const z of [0, 3000, 8000, 12000]) {
+    ctx.beginPath(); ctx.moveTo(L, Y(z)); ctx.lineTo(L + pw, Y(z)); ctx.stroke();
+    ctx.fillText(`${z / 1000}km`, 2, Y(z) + 3);
+  }
+  for (let d = 0; d <= maxKm; d += 50) ctx.fillText(`${d}`, X(d * 1000) - 6, h - 5);
+
+  // terreno
+  ctx.fillStyle = '#2a3646'; ctx.beginPath(); ctx.moveTo(X(0), Y(0));
+  for (const s of f.tr.samples) ctx.lineTo(X(s.d), Y(s.h));
+  ctx.lineTo(X(MAX_DIST), Y(0)); ctx.closePath(); ctx.fill();
+
+  // raggio
+  const col = f.el > 2 ? '#ffd166' : f.el > -1 ? '#f5a524' : '#f0643c';
+  ctx.lineWidth = 2.4; ctx.strokeStyle = col; ctx.beginPath();
+  let last = null;
+  for (let d = 0; d <= MAX_DIST; d += 1000) {
+    if (f.hit && d > f.hit.d) break;
+    const z = rayAltitude(d, S.h0, f.el, DEFAULT_K);
+    if (z > maxAlt) break;
+    last = [X(d), Y(z)];
+    d === 0 ? ctx.moveTo(...last) : ctx.lineTo(...last);
+  }
+  ctx.stroke();
+  if (f.hit && last) {
+    ctx.fillStyle = '#f2777a'; ctx.beginPath(); ctx.arc(X(f.hit.d), Y(f.hit.h), 4, 0, 7); ctx.fill();
+  }
+  $('secInfo').textContent = S.weather ? 'celle calde = strati attraversati dal raggio' : 'nubi non ancora caricate';
+}
+
+function drawTimeline() {
+  const c = $('timeline');
+  const { ctx, w, h } = setupCanvas(c);
+  ctx.clearRect(0, 0, w, h);
+  if (!S.vis.length) return;
+  const n = S.vis.length, bw = w / n;
+  const col = { on: '#f5a524', terrain: '#5a2f33', below: '#1c2230' };
+  S.vis.forEach((v, i) => { ctx.fillStyle = col[v]; ctx.fillRect(i * bw, 13, bw + 0.6, h - 26); });
+  ctx.fillStyle = '#8b98a8'; ctx.font = '10px ui-monospace, Menlo, monospace';
+  const tz = S.tz;
+  const iEv = S.minutes.findIndex((m) => m.t >= S.win.event);
+  const mark = (i, label, color, top) => {
+    if (i < 0) return;
+    ctx.fillStyle = color; ctx.fillRect(i * bw, top ? 10 : 13, 1.5, h - 23);
+    ctx.fillStyle = top ? color : '#8b98a8';
+    const tw = ctx.measureText(label).width;
+    ctx.textAlign = 'left';
+    ctx.fillText(label, Math.min(w - tw - 2, Math.max(2, i * bw - tw / 2)), top ? 9 : h - 1);
+  };
+  ctx.textAlign = 'left'; ctx.fillText(formatLocal(S.minutes[0].t, tz), 0, h - 1);
+  ctx.textAlign = 'right'; ctx.fillText(formatLocal(S.minutes[n - 1].t, tz), w, h - 1);
+  // ultimo (tramonto) o primo (alba) minuto con disco visibile sopra il rilievo
+  let iVis = -1;
+  if (S.type === 'sunset') { for (let i = 0; i < n; i++) if (S.vis[i] === 'on') iVis = i; }
+  else iVis = S.vis.indexOf('on');
+  if (iVis >= 0) mark(iVis, `${S.type === 'sunset' ? 'ultimo' : 'primo'} raggio ${formatLocal(S.minutes[iVis].t, tz)}`, '#f5a524', true);
+  mark(iEv, `${S.type === 'sunset' ? 'tramonto' : 'alba'} ${formatLocal(S.win.event, tz)}`, '#ffffff', false);
+  ctx.textAlign = 'left';
+  S._tlImage = ctx.getImageData(0, 0, c.width, c.height);
+}
+
+function drawTimelineCursor() {
+  const c = $('timeline');
+  if (!S._tlImage || c.width !== S._tlImage.width) { drawTimeline(); if (!S._tlImage) return; }
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.putImageData(S._tlImage, 0, 0);
+  const dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const w = c.width / dpr, n = S.vis.length;
+  ctx.fillStyle = '#e6edf3'; ctx.fillRect((S.tIdx + 0.5) * (w / n) - 1, 11, 2, c.height / dpr - 24);
+}
+
+// ---------- avvio ----------
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+load();

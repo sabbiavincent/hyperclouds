@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>hyperClouds</title>
+<meta name="theme-color" content="#0b0f14">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #121821; --line: #1f2733; --text: #e6edf3; --muted: #8b98a8;
+    --amber: #f5a524; --ember: #f0643c; --blue: #7cc4ff; --ok: #57d68d; --bad: #f2777a;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  main { max-width: 780px; margin: 0 auto; }
+  #map { height: 36vh; min-height: 220px; position: relative; }
+  .hud { position: absolute; z-index: 2; top: 8px; left: 8px; right: 8px; display: flex; gap: 6px;
+    justify-content: space-between; pointer-events: none; }
+  .hud > * { pointer-events: auto; }
+  .chip { background: rgba(11,15,20,.82); border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px;
+    font: 12px var(--mono); color: var(--text); }
+  button, select, input { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 9px; }
+  button { cursor: pointer; }
+  button.primary { border-color: var(--amber); color: var(--amber); font-weight: 600; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: transparent; color: var(--muted); }
+  .seg button.on { background: var(--ember); color: #fff; }
+  .panel { background: var(--panel); border-top: 1px solid var(--line); padding: 8px 10px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1; }
+  canvas { display: block; width: 100%; }
+  #pano { height: 190px; }
+  #section { height: 180px; }
+  #timeline { height: 42px; margin-top: 2px; }
+  input[type=range] { width: 100%; accent-color: var(--amber); padding: 0; border: 0; background: transparent; }
+  .label { color: var(--muted); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+  .tele { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 6px 0; }
+  .tele div { text-align: center; }
+  .tele b { display: block; font: 600 15px var(--mono); }
+  #verdict { font: 13px var(--mono); padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+  #clouds { font: 12px var(--mono); color: var(--muted); margin-top: 6px; white-space: pre-line; }
+  #status { font-size: 12px; color: var(--muted); min-height: 1.3em; }
+  .ttl { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 10px 2px; }
+  .ttl span:first-child { font-weight: 600; }
+  details { color: var(--muted); font-size: 12px; }
+  details p { margin: .4em 0; }
+  .bar { height: 3px; background: linear-gradient(90deg, var(--amber), var(--ember)); width: 0; transition: width .2s; }
+</style>
+</head>
+<body>
+<main>
+  <div id="map">
+    <div class="hud">
+      <div class="chip" id="coords">—</div>
+      <button class="chip" id="gps" title="Usa la mia posizione">GPS</button>
+    </div>
+  </div>
+  <div class="bar" id="bar"></div>
+
+  <div class="panel">
+    <div class="row">
+      <input type="date" id="date">
+      <div class="seg" id="event">
+        <button data-v="sunrise">Alba</button><button data-v="sunset" class="on">Tramonto</button>
+      </div>
+      <select id="model" class="grow"></select>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <label class="label" for="hag">Altezza sul suolo</label>
+      <input type="number" id="hag" value="2" min="0" max="3000" step="1" style="width:80px"> <span class="label">m</span>
+      <span class="grow"></span>
+      <button class="primary" id="reload">Ricalcola</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <div class="ttl"><span>Orizzonte reale</span><span class="label" id="panoInfo"></span></div>
+  <canvas id="pano"></canvas>
+
+  <div class="panel">
+    <canvas id="timeline"></canvas>
+    <input type="range" id="slider" min="0" max="60" value="0">
+    <div class="tele">
+      <div><span class="label" id="tLabel">Ora</span><b id="tTime">—</b></div>
+      <div><span class="label">Azimut</span><b id="tAz">—</b></div>
+      <div><span class="label">Elev. app.</span><b id="tEl">—</b></div>
+      <div><span class="label">Orizzonte</span><b id="tHz">—</b></div>
+    </div>
+    <div id="verdict">—</div>
+    <div id="clouds"></div>
+  </div>
+
+  <div class="ttl"><span>Sezione lungo il raggio</span><span class="label" id="secInfo"></span></div>
+  <canvas id="section"></canvas>
+
+  <div class="panel">
+    <details>
+      <summary>Che cosa è calcolato e che cosa no</summary>
+      <p><b>Calcolato e verificabile:</b> posizione del Sole (NOAA, verificata contro VSOP87), orizzonte reale da modello digitale del terreno (AWS Terrain Tiles, globale) con curvatura terrestre e rifrazione standard (k = 0,13), minuti in cui il bordo superiore del disco è sopra il rilievo. Il terreno entro 500 m dall'osservatore è escluso: lì il rumore del modello del terreno, gli edifici e gli alberi dominano, e l'ambiente immediato lo vedi da te.</p>
+      <p><b>Previsto:</b> copertura nuvolosa per strato (basse &lt; 3 km, medie 3–8 km, alte &gt; 8 km) da Open-Meteo, lungo l'azimut del tramonto/alba, interpolata nel tempo. Il programma mostra quali strati il raggio attraversa e con quale copertura: <i>non</i> stima ancora una probabilità di visibilità del disco né l'afterglow.</p>
+      <p>Date passate: si usa l'archivio delle previsioni (Historical Forecast API), utile per confronti con scatti già fatti.</p>
+    </details>
+  </div>
+</main>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
