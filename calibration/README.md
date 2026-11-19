@@ -30,3 +30,22 @@ curvatura e rifrazione (k = 0,13), passo 2 km fino a 13 km di quota.
 
 ## Limiti
 Scadenze brevi (le previsioni a 24–48 h sono meno accurate); due stazioni di pianura nordtedesca, un anno.
+
+## Seconda taratura (20/11/2026): geometria degli strati, 3 stazioni
+Aggiunta 01443 Freiburg (rilievi: Vosgi a ovest, orizzonte fino a +2,8°; esclusi 94 intervalli col Sole a meno di 1° sopra
+il rilievo). 66 geometrie confrontate: base delle nubi basse 0/300/600/1000/1500/2000 m, cima 2000/3000 m, base delle medie
+3000/4000/5000 m, base delle alte 8000/9500 m. Per ciascuna L scelto a Brier minimo; validazione lasciando fuori una stazione.
+Script: `browser/cal2.js` (funzioni `run` ed `evaluate`), verità al suolo in `browser/t2_*.json`.
+
+| geometria (basse / medie / alte) | L | skill | skill in validazione (Norderney, Lindenberg, Freiburg) |
+|---|---|---|---|
+| 0–3000 / 3000–8000 / > 8000 (attuale) | 50 km | 0,479 | 0,456 (0,47 · 0,61 · 0,29) |
+| 0–3000 / 3000–8000 / > 9500 (migliore) | 40 km | 0,490 | 0,466 (0,49 · 0,62 · 0,28) |
+| base basse sollevata a 1500 m, cima 2000 m (peggiore) | 20–30 km | 0,33 | 0,32 |
+
+- **Ipotesi "conta la base delle nubi" smentita su questi dati:** sollevare la base delle nubi basse peggiora sempre;
+  la geometria attuale è entro 0,01 di skill dalla migliore (differenza non significativa). Si mantiene il modello attuale.
+  Interpretazione possibile, non verificata: la "copertura bassa" dei modelli include nebbia e strati vicini al suolo, e la
+  copertura sopra la stazione è di per sé informativa.
+- **Freiburg, con rilievi, ha skill molto più bassa (0,29 contro 0,47–0,62):** in orografia complessa il modello rende meno.
+  Per Firenze è ragionevole attendersi un'affidabilità più vicina a Freiburg che alla pianura.
