@@ -200,7 +200,11 @@ async function load({ keepMeta = false } = {}) {
     status('Quota del punto…');
     const g = await dem.elevation(S.obs.lat, S.obs.lon, 13);
     if (id !== S.loadId) return;
-    if (g == null) throw new Error('modello del terreno non raggiungibile');
+    if (g == null) {
+      // tile fallita: non resta in cache come vuota, così un nuovo tentativo la riscarica
+      for (const [k, v] of dem.tiles) if (v === null) dem.tiles.delete(k);
+      throw new Error(`modello del terreno non raggiungibile: ${dem.lastError || 'motivo sconosciuto'}`);
+    }
     S.h0 = g + S.hag;
 
     // azimut della finestra (gestione del passaggio per 0/360)

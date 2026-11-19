@@ -59,11 +59,31 @@ export async function decodePng(buf) {
   return { width, height, data: rgba };
 }
 
+// Decodifica di riserva tramite canvas (solo se manca DecompressionStream o la decodifica JS fallisce)
+async function canvasDecode(buf) {
+  const bmp = await createImageBitmap(new Blob([buf], { type: 'image/png' }), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+  const c = typeof OffscreenCanvas !== 'undefined'
+    ? new OffscreenCanvas(bmp.width, bmp.height)
+    : Object.assign(document.createElement('canvas'), { width: bmp.width, height: bmp.height });
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bmp, 0, 0);
+  const img = ctx.getImageData(0, 0, bmp.width, bmp.height);
+  return { width: img.width, height: img.height, data: img.data };
+}
+
 // Loader per il browser: restituisce {width, height, data: Uint8ClampedArray RGBA}
 export async function browserTileLoader(z, x, y) {
-  const res = await fetch(TERRARIUM_URL(z, x, y), { mode: 'cors' });
-  if (!res.ok) throw new Error(`DEM ${z}/${x}/${y}: HTTP ${res.status}`);
-  return decodePng(await res.arrayBuffer());
+  let res;
+  try { res = await fetch(TERRARIUM_URL(z, x, y), { mode: 'cors' }); }
+  catch (e) { throw new Error(`rete (${e.message || e})`); }
+  if (!res.ok) throw new Error(`HTTP ${res.status} su ${z}/${x}/${y}`);
+  const buf = await res.arrayBuffer();
+  if (typeof DecompressionStream !== 'undefined') {
+    try { return await decodePng(buf); }
+    catch (e) { console.warn('decodifica PNG JS fallita, uso il canvas:', e); }
+  }
+  try { return await canvasDecode(buf); }
+  catch (e) { throw new Error(`decodifica PNG (${e.message || e})`); }
 }
 
 export class Dem {
@@ -83,7 +103,7 @@ export class Dem {
     if (this.pending.has(k)) return this.pending.get(k);
     const p = this.loader(z, x, y)
       .then((t) => { this.tiles.set(k, t); return t; })
-      .catch(() => { this.tiles.set(k, null); this.failures++; return null; })
+      .catch((e) => { this.tiles.set(k, null); this.failures++; this.lastError = e?.message || String(e); return null; })
       .finally(() => this.pending.delete(k));
     this.pending.set(k, p);
     return p;
