@@ -92,7 +92,7 @@ window.addEventListener('resize', () => { renderStatic(); renderDynamic(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { renderStatic(); renderDynamic(); } });
 
 // ---------- mappa ----------
-const MAP_STYLES = { chiara: 'https://tiles.openfreemap.org/styles/positron', scura: 'https://tiles.openfreemap.org/styles/dark' };
+const MAP_STYLES = { chiara: 'https://tiles.openfreemap.org/styles/liberty', scura: 'https://tiles.openfreemap.org/styles/dark' };
 S.mapStyle = store.get('mapStyle', 'chiara');
 const map = new maplibregl.Map({
   container: 'map', style: MAP_STYLES[S.mapStyle],
@@ -106,7 +106,8 @@ let mapReady = false;
 map.on('style.load', () => {
   const empty = { type: 'FeatureCollection', features: [] };
   for (const id of ['fan', 'rings', 'rayOn', 'rayOff', 'pts']) map.addSource(id, { type: 'geojson', data: empty });
-  map.addLayer({ id: 'fan', type: 'fill', source: 'fan', paint: { 'fill-color': '#f5a524', 'fill-opacity': 0.10 } });
+  map.addLayer({ id: 'fan', type: 'fill', source: 'fan', paint: { 'fill-color': '#f08c00', 'fill-opacity': S.mapStyle === 'chiara' ? 0.16 : 0.12 } });
+  map.addLayer({ id: 'fanEdge', type: 'line', source: 'fan', paint: { 'line-color': '#f08c00', 'line-width': 1, 'line-opacity': 0.6 } });
   map.addLayer({ id: 'rings', type: 'line', source: 'rings',
     paint: { 'line-color': ['get', 'c'], 'line-width': 1, 'line-dasharray': [3, 3], 'line-opacity': 0.7 } });
   map.addLayer({ id: 'rayOff', type: 'line', source: 'rayOff',
@@ -122,7 +123,7 @@ $('mapStyle').textContent = S.mapStyle === 'chiara' ? '☾' : '☀';
 $('mapStyle').onclick = () => {
   S.mapStyle = S.mapStyle === 'chiara' ? 'scura' : 'chiara'; store.set('mapStyle', S.mapStyle);
   $('mapStyle').textContent = S.mapStyle === 'chiara' ? '☾' : '☀';
-  mapReady = false; map.setStyle(MAP_STYLES[S.mapStyle]);
+  mapReady = false; map.setStyle(MAP_STYLES[S.mapStyle], { diff: false });
 };
 map.on('click', (e) => setObserver({ lat: e.lngLat.lat, lon: e.lngLat.lng }));
 
