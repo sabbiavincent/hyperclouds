@@ -92,15 +92,18 @@ window.addEventListener('resize', () => { renderStatic(); renderDynamic(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { renderStatic(); renderDynamic(); } });
 
 // ---------- mappa ----------
+const MAP_STYLES = { chiara: 'https://tiles.openfreemap.org/styles/positron', scura: 'https://tiles.openfreemap.org/styles/dark' };
+S.mapStyle = store.get('mapStyle', 'chiara');
 const map = new maplibregl.Map({
-  container: 'map', style: 'https://tiles.openfreemap.org/styles/dark',
+  container: 'map', style: MAP_STYLES[S.mapStyle],
   center: [S.obs.lon, S.obs.lat], zoom: 7.4, attributionControl: false,
 });
 // Attribuzione dovuta (OpenStreetMap/OpenFreeMap) ridotta a icona: si espande al tocco.
 map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 map.once('idle', () => document.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show'));
 let mapReady = false;
-map.on('load', () => {
+// i livelli si aggiungono a ogni caricamento di stile (anche dopo il cambio chiaro/scuro)
+map.on('style.load', () => {
   const empty = { type: 'FeatureCollection', features: [] };
   for (const id of ['fan', 'rings', 'rayOn', 'rayOff', 'pts']) map.addSource(id, { type: 'geojson', data: empty });
   map.addLayer({ id: 'fan', type: 'fill', source: 'fan', paint: { 'fill-color': '#f5a524', 'fill-opacity': 0.10 } });
@@ -108,12 +111,19 @@ map.on('load', () => {
     paint: { 'line-color': ['get', 'c'], 'line-width': 1, 'line-dasharray': [3, 3], 'line-opacity': 0.7 } });
   map.addLayer({ id: 'rayOff', type: 'line', source: 'rayOff',
     paint: { 'line-color': '#6b7787', 'line-width': 1.5, 'line-dasharray': [2, 2] } });
-  map.addLayer({ id: 'rayOn', type: 'line', source: 'rayOn', paint: { 'line-color': '#f5a524', 'line-width': 2.6 } });
+  map.addLayer({ id: 'rayOn', type: 'line', source: 'rayOn',
+    layout: { 'line-cap': 'round' }, paint: { 'line-color': ['get', 'c'], 'line-width': 3.2 } });
   map.addLayer({ id: 'pts', type: 'circle', source: 'pts',
     paint: { 'circle-radius': ['get', 'r'], 'circle-color': ['get', 'c'], 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
   mapReady = true;
-  renderMapStatic(); renderMapDynamic();
+  renderMapStatic(); renderMapDynamic(currentFrame());
 });
+$('mapStyle').textContent = S.mapStyle === 'chiara' ? '☾' : '☀';
+$('mapStyle').onclick = () => {
+  S.mapStyle = S.mapStyle === 'chiara' ? 'scura' : 'chiara'; store.set('mapStyle', S.mapStyle);
+  $('mapStyle').textContent = S.mapStyle === 'chiara' ? '☾' : '☀';
+  mapReady = false; map.setStyle(MAP_STYLES[S.mapStyle]);
+};
 map.on('click', (e) => setObserver({ lat: e.lngLat.lat, lon: e.lngLat.lng }));
 
 function setObserver(o, { byUser = true } = {}) {
@@ -135,7 +145,7 @@ function renderMapStatic() {
   ring.push(o);
   map.getSource('fan').setData(fc([{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring.map((p) => [p.lon, p.lat])] } }]));
   // anelli: dove ciascuno strato incontra l'orizzonte (raggio orizzontale)
-  const cols = { low: '#9fb3c8', mid: '#c7d4e2', high: '#ffd2a8' };
+  const cols = { low: '#3d8bfd', mid: '#9b5de5', high: '#e5484d' };
   const rings = [3000, 8000].map((h, i) => {
     const r = horizonDistanceToLayer(S.h0, h);
     const pts = [];
@@ -158,18 +168,24 @@ function renderMapDynamic(frame) {
     return;
   }
   const stop = frame.hit ? frame.hit.d : MAX_DIST;
+  // tratti del raggio colorati secondo lo strato attraversato (basse / medie / alte / sopra le nubi)
+  const LCOL = { low: '#3d8bfd', mid: '#9b5de5', high: '#e5484d', above: '#f5a524' };
+  const layerAt = (d) => { const z = rayAltitude(d, S.h0, frame.el); return z < 3000 ? 'low' : z < 8000 ? 'mid' : z < LAYER_TOP ? 'high' : 'above'; };
   const on = [], off = [];
-  for (let d = 0; d <= MAX_DIST; d += 5000) {
-    const p = destination(o.lat, o.lon, d, frame.az);
-    if (d <= stop) on.push(p); if (d >= stop - 5000) off.push(p);
+  let seg = null;
+  for (let d = 0; d <= Math.min(stop, MAX_DIST); d += 2500) {
+    const p = destination(o.lat, o.lon, d, frame.az), L = layerAt(d);
+    if (!seg || seg.L !== L) { if (seg) seg.pts.push(p); seg = { L, pts: [p] }; on.push(seg); } else seg.pts.push(p);
   }
+  for (let d = Math.max(0, stop - 5000); d <= MAX_DIST && frame.hit; d += 5000) off.push(destination(o.lat, o.lon, d, frame.az));
+  S.raySegs = on.map((g) => g.L);
   if (frame.hit) {
-    on.push({ lat: frame.hit.lat, lon: frame.hit.lon });
+    seg?.pts.push({ lat: frame.hit.lat, lon: frame.hit.lon });
     pts.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [frame.hit.lon, frame.hit.lat] }, properties: { r: 5, c: '#f2777a' } });
   } else if (frame.tr.peak) {
     pts.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [frame.tr.peak.lon, frame.tr.peak.lat] }, properties: { r: 4, c: '#8b98a8' } });
   }
-  map.getSource('rayOn').setData(fc(on.length > 1 ? [line(on)] : []));
+  map.getSource('rayOn').setData(fc(on.filter((g) => g.pts.length > 1).map((g) => ({ ...line(g.pts), properties: { c: LCOL[g.L] } }))));
   map.getSource('rayOff').setData(fc(frame.hit && off.length > 1 ? [line(off)] : []));
   map.getSource('pts').setData(fc(pts));
 }
