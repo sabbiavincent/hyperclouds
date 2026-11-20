@@ -49,3 +49,25 @@ Script: `browser/cal2.js` (funzioni `run` ed `evaluate`), verità al suolo in `b
   copertura sopra la stazione è di per sé informativa.
 - **Freiburg, con rilievi, ha skill molto più bassa (0,29 contro 0,47–0,62):** in orografia complessa il modello rende meno.
   Per Firenze è ragionevole attendersi un'affidabilità più vicina a Freiburg che alla pianura.
+
+## Terza taratura (20/11/2026): Ticino (MeteoSwiss, soleggiamento a 10 minuti `sre000z0`)
+Stazioni: LUG Lugano (273 m, lago tra rilievi; orizzonte fino a +11°, esclusi 877 intervalli), SBO Stabio (351 m, margine
+della pianura padana; orizzonte fino a +7°, esclusi 583), CIM Cimetta (1661 m, montagna; esclusi 136). Stesso periodo e metodo.
+
+| stazione | intervalli (Sole ≥ 4°) | sole osservato | skill del modello della app (L = 50 km) |
+|---|---|---|---|
+| Lugano | 1036 | 41% | 0,47 |
+| Cimetta | 1452 | 43% | 0,41 |
+| Stabio | 1215 | 26% | −0,12 (peggio della climatologia) |
+
+- Lugano e Cimetta: rendimento simile alla pianura tedesca; nelle fasce intermedie (40–80%) il modello è troppo ottimista
+  (osservato 31–52% contro 50–70% previsto).
+- **Stabio fallisce:** anche con probabilità prevista 80–100% il sole è registrato solo nel 57% dei casi. Ipotesi, non
+  verificata: foschia e inquinamento della pianura padana attenuano il disco sotto la soglia WMO di 120 W/m² di irradianza
+  diretta anche a 4–10° di elevazione. Il sensore registra "niente sole" anche quando un disco rosso e attenuato può
+  essere visibile e fotografabile. La soglia del sensore non coincide con la visibilità fotografica.
+- Sulle tre stazioni ticinesi il valore di L che rende meglio è 15–20 km (contro 40–50 km in pianura); anche qui la geometria
+  degli strati conta poco (differenze ≤ 0,001 di skill in validazione).
+- Conseguenza per Firenze (conca dell'Arno con inversioni e foschia invernali): attendersi comportamento intermedio tra
+  Lugano e Stabio. Il modello resta invariato (L = 50 km) finché non ci sono dati più vicini; la regione con foschia richiede
+  un termine di attenuazione da aerosol, non presente.

@@ -367,14 +367,21 @@ function renderDynamic() {
   renderMapDynamic(f);
 }
 
-function skyColors(el) {
-  // gradiente cielo in funzione dell'elevazione solare (solo resa visiva)
-  if (el > 6) return ['#1d3a5f', '#6b9ac4'];
-  if (el > 0) return ['#24375a', '#e8a35a'];
-  if (el > -3) return ['#1f2a4a', '#d9705a'];
-  if (el > -6) return ['#161d36', '#8c4b62'];
-  return ['#0b0f1c', '#2a2342'];
+// interpolazione continua tra tappe di colore in funzione dell'elevazione solare (solo resa visiva)
+const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+const lerpC = (c0, c1, t) => c0.map((v, i) => Math.round(v + (c1[i] - v) * t));
+function lerpStops(stops, el) {
+  if (el >= stops[0][0]) return stops[0].slice(1);
+  for (let i = 1; i < stops.length; i++) if (el >= stops[i][0]) {
+    const t = (stops[i - 1][0] - el) / (stops[i - 1][0] - stops[i][0]);
+    return stops[i].slice(1).map((c, k) => lerpC(stops[i - 1][k + 1], c, t));
+  }
+  return stops[stops.length - 1].slice(1);
 }
+const SKY = [[10, hex('#1d3a5f'), hex('#6b9ac4')], [5, hex('#22385c'), hex('#c99a6a')], [1, hex('#24375a'), hex('#e8a35a')],
+  [-1, hex('#20304f'), hex('#df7f5a')], [-3, hex('#1f2a4a'), hex('#d9705a')], [-6, hex('#161d36'), hex('#8c4b62')], [-9, hex('#0b0f1c'), hex('#2a2342')]];
+const CLOUD = [[8, [196, 205, 218]], [4, [120, 124, 140]], [1, [70, 74, 92]], [-1, [150, 92, 104]], [-4, [190, 104, 112]], [-8, [70, 52, 70]]];
+function skyColors(el) { return lerpStops(SKY, el).map((c) => `rgb(${c.join(',')})`); }
 
 function drawPano(f) {
   const { ctx, w, h } = setupCanvas($('pano'));
@@ -397,22 +404,29 @@ function drawPano(f) {
   ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, Y(0)); ctx.lineTo(w, Y(0)); ctx.stroke(); ctx.setLineDash([]);
 
-  // percorso del Sole nella finestra
-  ctx.strokeStyle = 'rgba(255,214,140,.55)'; ctx.lineWidth = 1.2; ctx.setLineDash([2, 3]);
-  ctx.beginPath();
-  S.minutes.forEach((m, i) => (i ? ctx.lineTo(X(m.az), Y(m.el)) : ctx.moveTo(X(m.az), Y(m.el))));
-  ctx.stroke(); ctx.setLineDash([]);
+  if (S.weather) drawPanoClouds(ctx, f, X, Y, a0, a1, e0, e1, w, h);
 
-  // disco solare (dimensione reale in scala verticale, minimo 3 px)
+  // disco solare (dimensione reale in scala verticale, minimo 3 px).
+  // Luminosità continua: frazione del disco sopra il rilievo × probabilità che le nubi lo lascino passare.
   const r = Math.max(3, (SUN_SEMIDIAMETER / (e1 - e0)) * (h - 26));
   const sx = X(f.az), sy = Y(f.el);
-  const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 6);
-  glow.addColorStop(0, f.state === 'on' ? 'rgba(255,200,110,.75)' : 'rgba(255,170,110,.25)');
+  const above = Math.max(0, Math.min(1, (f.el + SUN_SEMIDIAMETER - f.hz) / (2 * SUN_SEMIDIAMETER)));
+  const pc = f.clear?.P ?? (S.weather ? 0 : 1);
+  const lum = above * (S.weather ? pc : 1);
+  const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 7);
+  glow.addColorStop(0, `rgba(255,200,110,${(0.12 + 0.68 * lum).toFixed(3)})`);
   glow.addColorStop(1, 'rgba(255,170,110,0)');
-  ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(sx, sy, r * 6, 0, 7); ctx.fill();
-  ctx.fillStyle = '#ffd98a'; ctx.beginPath(); ctx.arc(sx, sy, r, 0, 7); ctx.fill();
+  ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(sx, sy, r * 7, 0, 7); ctx.fill();
+  ctx.fillStyle = `rgba(255,217,138,${(0.25 + 0.75 * lum).toFixed(3)})`; ctx.beginPath(); ctx.arc(sx, sy, r, 0, 7); ctx.fill();
 
-  if (S.weather) drawPanoClouds(ctx, f, X, Y, a0, a1, e0, e1, w, h);
+  // percorso del Sole: un punto per minuto, colorato come la barra temporale
+  const pcol = { libero: '#f5a524', incerto: '#c08a3e', bloccato: '#7d8796' };
+  S.minutes.forEach((m, i) => {
+    if (i % 2 || Math.abs(i - S.tIdx) <= 2) return;     // niente punti sopra il disco
+    const v = S.vis[i], cls = v === 'on' && S.probs.length ? probClass(S.probs[i]) : null;
+    ctx.fillStyle = cls ? pcol[cls] : v === 'on' ? 'rgba(255,214,140,.8)' : v === 'terrain' ? '#9a4a50' : 'rgba(140,150,170,.5)';
+    ctx.beginPath(); ctx.arc(X(m.az), Y(m.el), 1.6, 0, 7); ctx.fill();
+  });
 
   // silhouette per fasce di distanza: lontano chiaro (prospettiva aerea), vicino scuro
   const shades = ['#0d1218', '#1a2330', '#2a3646', '#3f4d60', '#5a6a80'];
@@ -442,11 +456,26 @@ function drawPano(f) {
  * nel campo di nubi interpolato e si disegna l'opacità 1 − P con lo stesso modello dei varchi usato per il verdetto.
  * Così il disco solare appare coperto esattamente quanto dice la probabilità.
  */
+// rumore a valori con interpolazione morbida e somma frattale (4 ottave), valori in [0,1] con distribuzione ~uniforme
+function hash2(x, y) { let h = (x * 374761393 + y * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+function vnoise(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = hash2(xi, yi), b = hash2(xi + 1, yi), c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function fbm(x, y) {
+  let s = 0, amp = 0.5, f = 1, norm = 0;
+  for (let o = 0; o < 4; o++) { s += amp * vnoise(x * f, y * f); norm += amp; amp *= 0.5; f *= 2.03; }
+  const v = s / norm;                                   // ~gaussiana attorno a 0,5: si stira verso l'uniforme
+  return Math.max(0, Math.min(1, 0.5 + (v - 0.5) * 2.4));
+}
+
 function drawPanoClouds(ctx, f, X, Y, a0, a1, e0, e1, w, h) {
   const key = `${S.tIdx}|${w}|${h}|${S.weather.model}`;
   const elBase = Math.max(e0, -1);
   if (!S.cloudCache || S.cloudCache.key !== key) {
-    const cols = Math.min(96, Math.round(w / 4)), rows = 56;
+    const cols = Math.min(140, Math.round(w / 3)), rows = 80;
     const dAz = (a1 - a0) / cols, dEl = (e1 - elBase) / rows;
     const op = new Float32Array(cols * rows);
     for (let i = 0; i < cols; i++) {
@@ -473,13 +502,24 @@ function drawPanoClouds(ctx, f, X, Y, a0, a1, e0, e1, w, h) {
   const { op, cols, rows } = S.cloudCache;
   // colore: nubi illuminate dal basso vicino al tramonto, grigie con Sole alto
   // con Sole basso le nubi davanti al Sole appaiono in controluce (scure); dopo il tramonto si accendono dal basso
-  const rgb = f.el >= 6 ? [196, 205, 218] : f.el >= 0 ? [78, 84, 104] : [176, 96, 104];
+  const rgb = lerpStops(CLOUD, f.el)[0];
   const off = Object.assign(document.createElement('canvas'), { width: cols, height: rows });
   const octx = off.getContext('2d');
   const img = octx.createImageData(cols, rows);
+  // Resa a "nubi con varchi": un rumore frattale fisso nel cielo viene confrontato con 1 − opacità, così la
+  // frazione di cielo disegnata come nube corrisponde all'opacità calcolata. La forma delle nubi è inventata;
+  // la quantità e la posizione (dove il raggio incontra copertura) vengono dal modello.
+  const az0 = a0, dAzc = (a1 - a0) / cols, dElc = (e1 - elBase) / rows;
   for (let k = 0; k < op.length; k++) {
-    img.data[k * 4] = rgb[0]; img.data[k * 4 + 1] = rgb[1]; img.data[k * 4 + 2] = rgb[2];
-    img.data[k * 4 + 3] = Math.round(Math.min(1, op[k]) * 0.94 * 255);
+    const i = k % cols, j = (k / cols) | 0;
+    const o = Math.min(1, op[k]);
+    if (o < 0.02) continue;
+    const n = fbm((az0 + (i + 0.5) * dAzc) / 2.6, (e1 - (j + 0.5) * dElc) / 0.8);
+    const edge = 0.12, thr = 1 - o;
+    const a = Math.max(0, Math.min(1, (n - thr + edge) / (2 * edge)));
+    const shade = 0.82 + 0.18 * n;                       // leggera modulazione interna
+    img.data[k * 4] = Math.round(rgb[0] * shade); img.data[k * 4 + 1] = Math.round(rgb[1] * shade); img.data[k * 4 + 2] = Math.round(rgb[2] * shade);
+    img.data[k * 4 + 3] = Math.round(a * 0.95 * 255);
   }
   octx.putImageData(img, 0, 0);
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
