@@ -76,9 +76,38 @@ function locatePhone(auto) {
       S.phone = { lat: p.coords.latitude, lon: p.coords.longitude };
       setObserver(S.phone);
     },
-    (e) => { if (!auto) status(`GPS non disponibile: ${e.message}`); },
+    (e) => { if (!auto) gpsHelp(e); },
     { enableHighAccuracy: true, timeout: auto ? 8000 : 15000, maximumAge: 60000 });
 }
+
+// Una pagina web non può accendere la localizzazione né aprire le impostazioni: si spiegano i passaggi.
+async function gpsHelp(err) {
+  const ff = /firefox/i.test(navigator.userAgent);
+  let perm = null;
+  try { perm = (await navigator.permissions.query({ name: 'geolocation' })).state; } catch {}
+  const site = ff
+    ? ['Tocca il lucchetto a sinistra dell\'indirizzo.', 'Alla voce Posizione scegli Consentito.', 'Ricarica la pagina.']
+    : ['Tocca l\'icona a sinistra dell\'indirizzo.', 'Autorizzazioni → Posizione → Consenti.', 'Ricarica la pagina.'];
+  const app = ['Impostazioni → App → ' + (ff ? 'Firefox' : 'Chrome') + ' → Autorizzazioni → Posizione.', 'Scegli Consenti solo mentre l\'app è in uso.'];
+  const os = ['Scorri due volte dall\'alto dello schermo e tocca il riquadro Posizione.', 'In alternativa: Impostazioni → Posizione → Usa posizione su attivo.'];
+  let title, steps;
+  if (err.code === 1) {
+    title = perm === 'denied' ? 'Il sito non ha il permesso di usare la posizione' : 'Il browser non ha il permesso di usare la posizione';
+    steps = perm === 'denied' ? [...site, 'Se non basta:', ...app] : [...app, 'Poi, se richiesto, consenti anche al sito:', ...site];
+  } else if (err.code === 2) {
+    title = 'La localizzazione del telefono sembra spenta';
+    steps = [...os, 'Se è già attiva, controlla i permessi:', ...app];
+  } else {
+    title = 'La posizione non è arrivata in tempo';
+    steps = ['Riprova all\'aperto o vicino a una finestra.', 'Oppure inserisci le coordinate nel campo sotto la data.'];
+  }
+  $('gpsTitle').textContent = title;
+  $('gpsSteps').replaceChildren(...steps.map((t) => Object.assign(document.createElement('li'), { textContent: t })));
+  $('gpsHelp').hidden = false;
+  status(`GPS non disponibile: ${title.toLowerCase()}.`);
+}
+$('gpsRetry').onclick = () => { $('gpsHelp').hidden = true; locatePhone(false); };
+$('gpsClose').onclick = () => { $('gpsHelp').hidden = true; };
 $('gps').onclick = () => locatePhone(false);
 $('coordForm').onsubmit = (e) => {
   e.preventDefault();

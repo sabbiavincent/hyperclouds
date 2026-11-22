@@ -51,6 +51,9 @@
   .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: -4px; }
   #vCloud:empty, #vRain:empty { display: none; }
   #vRain { margin-top: 3px; }
+  #gpsHelp { border: 1px solid var(--amber); }
+  #gpsHelp ol { margin: 6px 0; padding-left: 20px; }
+  [hidden] { display: none !important; }
   details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
   #calls.warn { color: var(--bad); }
   #clouds { font: 12px var(--mono); color: var(--muted); margin-top: 6px; white-space: pre-line; }
@@ -79,6 +82,11 @@
   </div>
   <div class="legend" style="padding:3px 10px;background:var(--panel)">Raggio sulla mappa nello strato: <i style="background:#3d8bfd"></i>basse <i style="background:#9b5de5"></i>medie <i style="background:#e5484d"></i>alte <i style="background:#f5a524"></i>sopra le nubi · confronta con le mappe di nubi di Windy negli stessi tratti</div>
   <div class="bar" id="bar"></div>
+  <div id="gpsHelp" class="panel" hidden>
+    <b id="gpsTitle"></b>
+    <ol id="gpsSteps"></ol>
+    <div class="row"><button class="primary" id="gpsRetry">Riprova</button><button id="gpsClose">Chiudi</button></div>
+  </div>
 
   <div class="panel">
     <div class="row">
