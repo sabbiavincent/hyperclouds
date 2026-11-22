@@ -85,9 +85,13 @@ async function gpsHelp(err) {
   const ff = /firefox/i.test(navigator.userAgent);
   let perm = null;
   try { perm = (await navigator.permissions.query({ name: 'geolocation' })).state; } catch {}
-  const site = ff
-    ? ['Tocca il lucchetto a sinistra dell\'indirizzo.', 'Alla voce Posizione scegli Consentito.', 'Ricarica la pagina.']
-    : ['Tocca l\'icona a sinistra dell\'indirizzo.', 'Autorizzazioni → Posizione → Consenti.', 'Ricarica la pagina.'];
+  const standalone = matchMedia('(display-mode: standalone)').matches;
+  const site = standalone
+    ? (ff ? ['Apri Firefox → ⋮ → Impostazioni → Autorizzazioni sito → Posizione.', 'Consenti a sabbiavincent.github.io.', 'Riapri l\'app.']
+          : ['Apri Chrome → ⋮ → Impostazioni → Impostazioni sito → Posizione.', 'Tocca sabbiavincent.github.io e scegli Consenti.', 'Riapri l\'app.'])
+    : ff
+      ? ['Tocca il lucchetto accanto all\'indirizzo della pagina.', 'Alla voce Posizione scegli Consentito.', 'Ricarica la pagina.']
+      : ['Tocca l\'icona accanto all\'indirizzo della pagina (non il menu ⋮).', 'Autorizzazioni → Posizione → Consenti.', 'Ricarica la pagina.'];
   const app = ['Impostazioni → App → ' + (ff ? 'Firefox' : 'Chrome') + ' → Autorizzazioni → Posizione.', 'Scegli Consenti solo mentre l\'app è in uso.'];
   const os = ['Scorri due volte dall\'alto dello schermo e tocca il riquadro Posizione.', 'In alternativa: Impostazioni → Posizione → Usa posizione su attivo.'];
   let title, steps;
