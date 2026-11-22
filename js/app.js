@@ -91,7 +91,8 @@ async function gpsHelp(err) {
           : ['Apri Chrome → ⋮ → Impostazioni → Impostazioni sito → Posizione.', 'Tocca sabbiavincent.github.io e scegli Consenti.', 'Riapri l\'app.'])
     : ff
       ? ['Tocca il lucchetto accanto all\'indirizzo della pagina.', 'Alla voce Posizione scegli Consentito.', 'Ricarica la pagina.']
-      : ['Tocca l\'icona accanto all\'indirizzo della pagina (non il menu ⋮).', 'Autorizzazioni → Posizione → Consenti.', 'Ricarica la pagina.'];
+      : ['Tocca ⋮ in alto a destra.', 'Nella fila di icone in cima al menu tocca ⓘ.', 'Autorizzazioni → Posizione → Consenti.', 'Ricarica la pagina.',
+         'Se Posizione non compare: ⋮ → Impostazioni → Impostazioni sito → Posizione; interruttore attivo; in Bloccati tocca sabbiavincent.github.io → Consenti.'];
   const app = ['Impostazioni → App → ' + (ff ? 'Firefox' : 'Chrome') + ' → Autorizzazioni → Posizione.', 'Scegli Consenti solo mentre l\'app è in uso.'];
   const os = ['Scorri due volte dall\'alto dello schermo e tocca il riquadro Posizione.', 'In alternativa: Impostazioni → Posizione → Usa posizione su attivo.'];
   let title, steps;
