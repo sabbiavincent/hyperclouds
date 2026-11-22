@@ -49,7 +49,8 @@
   #vCloud { margin-top: 3px; }
   .legend { font-size: 10px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; }
   .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: -4px; }
-  #vCloud:empty { display: none; }
+  #vCloud:empty, #vRain:empty { display: none; }
+  #vRain { margin-top: 3px; }
   details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
   #calls.warn { color: var(--bad); }
   #clouds { font: 12px var(--mono); color: var(--muted); margin-top: 6px; white-space: pre-line; }
@@ -105,7 +106,7 @@
 
   <div class="panel">
     <canvas id="timeline"></canvas>
-    <div class="legend"><i style="background:#f5a524"></i>libero <i style="background:#9a6a2c"></i>incerto <i style="background:#4a5566"></i>bloccato da nubi <i style="background:#5a2f33"></i>dietro il rilievo <i style="background:#1c2230"></i>sotto l'orizzonte</div>
+    <div class="legend"><i style="background:#f5a524"></i>libero <i style="background:#9a6a2c"></i>incerto <i style="background:#4a5566"></i>bloccato da nubi <i style="background:#5a2f33"></i>dietro il rilievo <i style="background:#1c2230"></i>sotto l'orizzonte <i style="background:#7cc4ff"></i>pioggia (striscia sotto)</div>
     <input type="range" id="slider" min="0" max="60" value="0">
     <div class="tele">
       <div><span class="label" id="tLabel">Ora</span><b id="tTime">—</b></div>
@@ -113,7 +114,7 @@
       <div><span class="label">Elev. app.</span><b id="tEl">—</b></div>
       <div><span class="label">Orizzonte</span><b id="tHz">—</b></div>
     </div>
-    <div id="verdict"><div id="vTerrain">—</div><div id="vCloud"></div></div>
+    <div id="verdict"><div id="vTerrain">—</div><div id="vCloud"></div><div id="vRain"></div></div>
   </div>
 
   <div class="panel">
@@ -132,6 +133,7 @@
       <p><b>Previsto:</b> copertura nuvolosa per strato (basse &lt; 3 km, medie 3–8 km, alte &gt; 8 km) da Open-Meteo, su più direzioni nel ventaglio del panorama, interpolata in azimut e nel tempo. Le nubi del panorama sono una resa: la quantità di cielo coperto in ogni direzione viene dal modello, la forma delle nubi è inventata. Il disco solare è disegnato con luminosità proporzionale alla probabilità calcolata; i punti del percorso hanno i colori della barra temporale.</p>
       <p><b>Probabilità che il disco sia visibile:</b> P = exp(Σ ln(1−c)·Δd / L) lungo il raggio, con L = 50 km. Tarata su un anno di soleggiamento misurato ogni 10 minuti in tre stazioni DWD (Norderney, Lindenberg, Freiburg) con previsioni ICON-D2 a breve scadenza: 5090 intervalli, Sole tra 4° e 10°; probabilità ben calibrate, errore ridotto del 46–61% rispetto alla climatologia in pianura, solo del 29% a Freiburg, tra i rilievi. Confrontate 66 geometrie degli strati: sollevare la base delle nubi non migliora. In Ticino (MeteoSwiss): Lugano 0,47, Cimetta 0,41; Stabio, margine della pianura padana, fallisce (foschia: il sensore non registra sole anche con cielo previsto sgombro). Limiti: scadenze di 24–48 h sono meno accurate; sotto 4° di elevazione la regola è estrapolata; in zone collinari come Firenze l'affidabilità attesa è più bassa. Fasce: libero ≥ 70%, incerto 30–70%, bloccato &lt; 30%. Nessuna stima dell'afterglow.</p>
       <p>Fonti: mappa © OpenStreetMap / OpenFreeMap / OpenMapTiles; terreno AWS Terrain Tiles; nubi Open-Meteo.</p>
+      <p><b>Pioggia sul posto:</b> precipitazione oraria e probabilità dal modello automatico di Open-Meteo nel punto di osservazione. La pioggia prevista su un punto preciso è meno affidabile della nuvolosità, soprattutto con i rovesci.</p>
       <p id="calls"></p>
       <p>Date passate: si usa l'archivio delle previsioni (Historical Forecast API), utile per confronti con scatti già fatti.</p>
     </details>

@@ -214,3 +214,31 @@ export function rayClear(snap, h0, el, stopDist = Infinity, k = DEFAULT_K, stepK
   }
   return { P: n ? Math.exp(S / GAP_L_KM) : null, worst, n };
 }
+
+// ---- Pioggia sul posto: precipitazione oraria e probabilità (modello automatico di Open-Meteo) ----
+// Richiesta separata e piccola (1 punto): se fallisce, nubi e verdetto non ne risentono.
+export async function fetchRain(obs, dateStr) {
+  const q = new URLSearchParams({
+    latitude: obs.lat.toFixed(4), longitude: obs.lon.toFixed(4),
+    hourly: 'precipitation,precipitation_probability', timeformat: 'unixtime', timezone: 'GMT',
+    start_date: shiftDate(dateStr, -1), end_date: shiftDate(dateStr, 1),
+  });
+  const ageDays = (Date.now() - Date.parse(dateStr + 'T00:00:00Z')) / 86400000;
+  let j;
+  try {
+    if (ageDays > 60) throw new Error('archivio');
+    j = await getJson(`${FORECAST}?${q}`);
+  } catch {
+    j = await getJson(`${HISTORICAL}?${q}`);
+  }
+  if (Array.isArray(j)) j = j[0];
+  return { times: j.hourly.time.map((t) => t * 1000), mm: j.hourly.precipitation, prob: j.hourly.precipitation_probability || [] };
+}
+
+/** Pioggia nell'ora che contiene t (in Open-Meteo il valore orario è la somma dell'ora che termina a quell'istante). */
+export function rainAt(rain, t) {
+  if (!rain) return null;
+  const i = rain.times.findIndex((x) => x >= t);
+  if (i < 0) return null;
+  return { mm: rain.mm[i], prob: rain.prob[i] ?? null, end: rain.times[i] };
+}

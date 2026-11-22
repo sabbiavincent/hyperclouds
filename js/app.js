@@ -3,7 +3,7 @@ import { destination, rayAltitude, horizonDistanceToLayer, DEFAULT_K } from './g
 import { Dem, browserTileLoader } from './dem.js';
 import { parseCoords } from './coords.js';
 import { prefetchFan, horizonProfile, horizonAt, transect, rayTerrainHit, BANDS, MAX_DIST } from './terrain.js';
-import { fetchMeta, fetchTransectClouds, cloudsAtAz, rayLayerCrossings, rayClear, coverAt, callCount,
+import { fetchMeta, fetchTransectClouds, fetchRain, rainAt, cloudsAtAz, rayLayerCrossings, rayClear, coverAt, callCount,
   DAILY_LIMIT, GAP_L_KM, LAYER_TOP, LAYERS, MODELS } from './weather.js';
 
 const $ = (id) => document.getElementById(id);
@@ -194,7 +194,7 @@ function renderMapDynamic(frame) {
 // ---------- caricamento ----------
 async function load({ keepMeta = false } = {}) {
   const id = ++S.loadId;
-  S.trCache.clear(); S.weather = null; S.weatherErr = null; S.profile = null; S.probs = []; S.cloudCache = null;
+  S.trCache.clear(); S.weather = null; S.weatherErr = null; S.profile = null; S.probs = []; S.cloudCache = null; S.rain = null;
   $('coords').textContent = `${S.obs.lat.toFixed(4)}, ${S.obs.lon.toFixed(4)}`;
   progress(0.05);
   try {
@@ -268,6 +268,7 @@ async function loadWeather(id) {
     const a0 = S.profile.azMin, a1 = S.profile.azMax;
     const nDir = Math.max(2, Math.ceil((a1 - a0) / 12) + 1);
     const dirs = Array.from({ length: nDir }, (_, i) => a0 + ((a1 - a0) * i) / (nDir - 1));
+    fetchRain(S.obs, S.date).then((r) => { if (id === S.loadId) { S.rain = r; drawTimeline(); renderDynamic(); } }).catch(() => {});
     const res = await Promise.all(dirs.map((az) => fetchTransectClouds(S.obs, az, S.date, S.model)));
     if (id !== S.loadId) return;
     S.weather = {
@@ -347,6 +348,14 @@ function renderDynamic() {
     v.textContent = 'Sotto l\'orizzonte astronomico: illuminazione solo dal basso delle nubi';
   }
   $('verdict').style.borderColor = v.style.borderColor;
+  const vr = $('vRain'), ra = rainAt(S.rain, f.t);
+  if (!ra) vr.textContent = '';
+  else {
+    const mm = ra.mm ?? 0, p = ra.prob;
+    const lvl = mm < 0.1 ? 'assente' : mm < 1 ? 'debole' : mm < 4 ? 'moderata' : 'forte';
+    vr.textContent = `Pioggia sul posto: ${lvl}${mm >= 0.1 ? ` (${mm.toFixed(1)} mm nell'ora)` : ''}${p != null ? ` · probabilità ${Math.round(p)}%` : ''}`;
+    vr.style.color = (p ?? 0) >= 50 || mm >= 1 ? 'var(--blue)' : 'var(--muted)';
+  }
   const vc = $('vCloud');
   vc.textContent = '';
   if (f.state === 'on') {
@@ -615,6 +624,14 @@ function drawTimeline() {
     ctx.fillStyle = pc ? pcol[pc] : col[v];
     ctx.fillRect(i * bw, 13, bw + 0.6, h - 26);
   });
+  if (S.rain) {   // striscia sotto la barra: azzurro con intensità pari alla probabilità di pioggia (o ai mm, se manca)
+    S.minutes.forEach((m, i) => {
+      const r = rainAt(S.rain, m.t); if (!r) return;
+      const a = r.prob != null ? r.prob / 100 : Math.min(1, (r.mm || 0) / 2);
+      if (a < 0.05) return;
+      ctx.fillStyle = `rgba(124,196,255,${a.toFixed(2)})`; ctx.fillRect(i * bw, h - 13, bw + 0.6, 3);
+    });
+  }
   ctx.fillStyle = '#8b98a8'; ctx.font = '10px ui-monospace, Menlo, monospace';
   const tz = S.tz;
   const iEv = S.minutes.findIndex((m) => m.t >= S.win.event);
